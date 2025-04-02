@@ -154,7 +154,7 @@ app_ui = ui.page_sidebar(
         # Option to show or hide annotations in figure
         ui.input_switch('annot', 'Display Frequencies', value=True),
         # Option to highlight cells on click
-        ui.input_switch("enable_clicks", "Click to Highlight", value=True),
+        ui.input_switch("enable_clicks", "Click to Highlight", value=False),
         # Accordion layout to collapse filters
         ui.accordion(
             # Option to filter figure's underlying df
