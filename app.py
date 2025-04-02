@@ -90,7 +90,8 @@ def heatmap(df: pl.DataFrame, round_filter: list = None, annot: bool = True):
     ax.set_ylabel("Losing Team Last Digit")  # Add axes labels
     # Add sample size
     cbar = ax.collections[0].colorbar.ax
-    cbar.text(0.5, -0.01, f'N: {df.shape[0]}', transform=cbar.transAxes, ha='center', va='top')
+    cbar.text(0.5, -0.01, f'N: {df.shape[0]}', transform=cbar.transAxes,
+              ha='center', va='top', fontsize=plt.rcParams["font.size"]*0.8)
     # Add title
     title = "Squares Probability Heatmap"  # Init title
     if round_filter:
