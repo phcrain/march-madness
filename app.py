@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 from math import floor
-
+from io import BytesIO
 
 def format_rounds(selected_rounds):
     """Format selected rounds by collapsing consecutive rounds into a range."""
@@ -58,7 +58,7 @@ def format_rounds(selected_rounds):
     return ""
 
 
-def heatmap(df: pl.DataFrame, round_filter: list = None, annot: bool = True):
+def heatmap(df: pl.DataFrame, round_filter: list = None, annot: bool = True, fontsize: None | int = None):
     if round_filter:
         df = df.filter(pl.col("Round").is_in(round_filter))
 
@@ -85,7 +85,10 @@ def heatmap(df: pl.DataFrame, round_filter: list = None, annot: bool = True):
     heatmap_pd = heatmap_df.to_pandas().set_index("L_Last_Digit")
 
     fig, ax = plt.subplots(figsize=(24, 24), dpi=100)  # Init fig and ax
-    ax = sns.heatmap(heatmap_pd, annot=annot, cmap="coolwarm", fmt=".2%", linewidths=0.5)  # Create heatmap
+    annot_kws = {"size": fontsize} if fontsize else {}  # Adjust font size
+    # Create heatmap
+    ax = sns.heatmap(heatmap_pd, annot=annot, annot_kws=annot_kws, cmap="coolwarm", fmt=".2%", linewidths=0.5)
+    ax.tick_params(axis='both', labelsize=fontsize)  # Adjust tick font size
     ax.set_xlabel("Winning Team Last Digit")  # Add axes labels
     ax.set_ylabel("Losing Team Last Digit")  # Add axes labels
     # Add sample size
@@ -175,10 +178,12 @@ app_ui = ui.page_sidebar(
     ),
     ui.include_css("www/styles.css"),
     ui.div(
-        {"class": "square-plot-container"},
-        ui.output_plot("heatmap_plot", height='95%', width='100%', click=True)
+        ui.div(
+            {"class": "square-plot-container"},
+            ui.output_plot("heatmap_plot", height='95%', width='120%', click=True),
+        ),
+        ui.div({"style": "float: right"}, ui.download_button("download_plot", "Download", width='100px', style='padding: 12px 0')),  # Download button
     ),
-    # ui.output_ui("highlighted_cells_ui"),  # DEV: unused ui for displaying highlighted cells to unhighlight
     fillable=True,
     fillable_mobile=True
 )
@@ -188,15 +193,19 @@ def server(input, output, session):
     # Create reactive list for holding highlighted cell tuples
     highlight_cells = reactive.value([])
 
-    @render.plot
-    def heatmap_plot():
+    def generate_heatmap(fontsize=None):
         df = process_data()
-        fig, ax = heatmap(df, input.rounds(), annot=input.annot())
+        fig, ax = heatmap(df, input.rounds(), annot=input.annot(), fontsize=fontsize)
         to_highlight = highlight_cells.get()
         if to_highlight:
             for (i, j) in to_highlight:
                 ax.add_patch(plt.Rectangle((j, i), 1, 1, fill=False, edgecolor='black', lw=3,
-                             clip_on=False))  # allows for highlighting outside of axes dimensions
+                                           clip_on=False))  # allows for highlighting outside of axes dimensions
+        return fig
+
+    @render.plot
+    def heatmap_plot():
+        fig = generate_heatmap()
         return fig
 
     @reactive.effect
@@ -236,28 +245,16 @@ def server(input, output, session):
 
                 highlight_cells.set(new_cells)  # Update highlight list
 
-    # ### DEV: unused block for highlighting and de-highlighting cells based on action button
-    # @render.ui
-    # def highlighted_cells_ui():
-    #     """Dynamically generate UI elements for highlighted cells."""
-    #     cells = highlight_cells.get()
-    #     if not cells:
-    #         return ui.div("No highlighted cells yet.")
-    #
-    #     return ui.div(
-    #         *[ui.div(f"W: {w} L: {l}",
-    #                  ui.input_action_button(f"remove_{l}_{w}", "❌")) for (l, w) in cells]
-    #     )
-    #
-    # @reactive.effect
-    # @reactive.event(input.highlight_cell)
-    # def _():
-    #     cell_prev = highlight_cells.get()
-    #     new_w = input.w_digit()
-    #     new_l = input.l_digit()
-    #     cell_new = (new_l, new_w)
-    #     if cell_new not in cell_prev:
-    #         highlight_cells.set(cell_prev + [cell_new])
+    @render.download(filename="heatmap.png")
+    def download_plot():
+        fig = generate_heatmap(fontsize=16)
+
+        # Save the plot as a PNG image in memory
+        img_buffer = BytesIO()
+        fig.savefig(img_buffer, format="png", bbox_inches="tight", dpi=300)
+        plt.close(fig)  # Close the figure to free memory
+
+        yield img_buffer.getvalue()
 
 
 
