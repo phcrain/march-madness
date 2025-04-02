@@ -172,7 +172,11 @@ app_ui = ui.page_sidebar(
         ),
         open='desktop'
     ),
-    ui.output_plot("heatmap_plot", height='100%', click=True),
+    ui.include_css("www/styles.css"),
+    ui.div(
+        {"class": "square-plot-container"},
+        ui.output_plot("heatmap_plot", height='95%', width='100%', click=True)
+    ),
     # ui.output_ui("highlighted_cells_ui"),  # DEV: unused ui for displaying highlighted cells to unhighlight
     fillable=True,
     fillable_mobile=True
