@@ -48,13 +48,8 @@ def format_rounds(selected_rounds):
         formatted_rounds.extend(temp_range)
 
     if formatted_rounds:
-        title = f"({', '.join(formatted_rounds)})"
-        if len(title) > 37:
-            title = '\n' + title
-        else:
-            title = ' ' + title
-        return title
-
+        return f"\n({', '.join(formatted_rounds)})"
+        
     return ""
 
 
