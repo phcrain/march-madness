@@ -152,7 +152,7 @@ def process_data():
 app_ui = ui.page_sidebar(
     ui.sidebar(
         # Option to show or hide annotations in figure
-        ui.input_switch('annot', 'Display Frequencies', value=True),
+        ui.input_switch('annot', 'Display Frequencies', value=False),
         # Option to highlight cells on click
         ui.input_switch("enable_clicks", "Click to Highlight", value=False),
         # Accordion layout to collapse filters
