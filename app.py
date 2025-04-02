@@ -169,7 +169,8 @@ app_ui = ui.page_sidebar(
                 value='filters'
             ),
             open=False  # default the filter accordion to closed
-        )
+        ),
+        open='desktop'
     ),
     ui.output_plot("heatmap_plot", height='100%', click=True),
     # ui.output_ui("highlighted_cells_ui"),  # DEV: unused ui for displaying highlighted cells to unhighlight
