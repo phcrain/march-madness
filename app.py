@@ -5,6 +5,7 @@ import seaborn as sns
 import numpy as np
 from math import floor
 from io import BytesIO
+from matplotlib.ticker import PercentFormatter, LinearLocator
 
 def format_rounds(selected_rounds):
     """Format selected rounds by collapsing consecutive rounds into a range."""
@@ -49,14 +50,11 @@ def format_rounds(selected_rounds):
 
     if formatted_rounds:
         return f"\n({', '.join(formatted_rounds)})"
-        
+
     return ""
 
 
-def heatmap(df: pl.DataFrame, round_filter: list = None, annot: bool = True, fontsize: None | int = None):
-    if round_filter:
-        df = df.filter(pl.col("Round").is_in(round_filter))
-
+def heatmap(df: pl.DataFrame, round_filter: list = None, annot: bool = True, cbar: bool = True, fontsize: None | int = None):
     freq_table = df.group_by(["W_Last_Digit", "L_Last_Digit"]).agg(
         pl.len().alias("Count")
     ).sort(by=['W_Last_Digit', 'L_Last_Digit'])
@@ -82,14 +80,20 @@ def heatmap(df: pl.DataFrame, round_filter: list = None, annot: bool = True, fon
     fig, ax = plt.subplots(figsize=(24, 24), dpi=100)  # Init fig and ax
     annot_kws = {"size": fontsize} if fontsize else {}  # Adjust font size
     # Create heatmap
-    ax = sns.heatmap(heatmap_pd, annot=annot, annot_kws=annot_kws, cmap="coolwarm", fmt=".2%", linewidths=0.5)
+    ax = sns.heatmap(heatmap_pd, cmap="coolwarm", annot=annot, annot_kws=annot_kws,
+                     fmt=".2%", linewidths=0.5,
+                     cbar=cbar, cbar_kws={'location': 'bottom', 'format': PercentFormatter(1, 2), 'ticks': LinearLocator(3)})
     ax.tick_params(axis='both', labelsize=fontsize)  # Adjust tick font size
     ax.set_xlabel("Winning Team Last Digit")  # Add axes labels
     ax.set_ylabel("Losing Team Last Digit")  # Add axes labels
     # Add sample size
-    cbar = ax.collections[0].colorbar.ax
-    cbar.text(0.5, -0.01, f'N: {df.shape[0]}', transform=cbar.transAxes,
-              ha='center', va='top', fontsize=plt.rcParams["font.size"]*0.8)
+    if cbar:
+        cbar_ax = ax.collections[0].colorbar.ax
+        cbar_ax.text(.03, 1.25, f'N: {df.shape[0]}', transform=cbar_ax.transAxes,
+                  ha='center', va='top', fontsize=plt.rcParams["font.size"]*0.8)
+    else:
+        pass
+        ###TODO: add non-cbar-based N text location
     # Add title
     title = "Squares Probability Heatmap"  # Init title
     if round_filter:
@@ -152,8 +156,9 @@ app_ui = ui.page_sidebar(
     ui.sidebar(
         # Option to show or hide annotations in figure
         ui.input_switch('annot', 'Display Frequencies', value=False),
+        ui.input_switch('cbar', 'Display Colorbar', value=True),
         # Option to highlight cells on click
-        ui.input_switch("enable_clicks", "Click to Highlight", value=False),
+        ui.input_switch("enable_clicks", "Click to Highlight", value=True),
         # Accordion layout to collapse filters
         ui.accordion(
             # Option to filter figure's underlying df
@@ -177,7 +182,7 @@ app_ui = ui.page_sidebar(
             {"class": "square-plot-container"},
             ui.output_plot("heatmap_plot", height='95%', width='120%', click=True),
         ),
-        ui.div({"style": "float: right"}, ui.download_button("download_plot", "Download", width='100px', style='padding: 12px 0')),  # Download button
+        ui.div({"style": "float: left"}, ui.download_button("download_plot", "Download", width='100px', style='padding: 12px 0')),  # Download button
     ),
     fillable=True,
     fillable_mobile=True
@@ -188,14 +193,22 @@ def server(input, output, session):
     # Create reactive list for holding highlighted cell tuples
     highlight_cells = reactive.value([])
 
+    df = reactive.value(process_data())
+
+    @reactive.effect
+    def filter_df():
+        new_df = process_data()
+        if input.rounds():
+            new_df = new_df.filter(pl.col("Round").is_in(input.rounds()))
+        df.set(new_df)
+
     def generate_heatmap(fontsize=None):
-        df = process_data()
-        fig, ax = heatmap(df, input.rounds(), annot=input.annot(), fontsize=fontsize)
+        fig, ax = heatmap(df.get(), input.rounds(), annot=input.annot(), cbar=input.cbar(), fontsize=fontsize)
         to_highlight = highlight_cells.get()
         if to_highlight:
             for (i, j) in to_highlight:
                 ax.add_patch(plt.Rectangle((j, i), 1, 1, fill=False, edgecolor='black', lw=3,
-                                           clip_on=False))  # allows for highlighting outside of axes dimensions
+                                           clip_on=False))  # allows for highlighting outside axes dimensions
         return fig
 
     @render.plot
