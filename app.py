@@ -5,7 +5,54 @@ import seaborn as sns
 import numpy as np
 from math import floor
 from io import BytesIO
-from matplotlib.ticker import PercentFormatter, LinearLocator
+from matplotlib.ticker import PercentFormatter
+
+# Load dataset
+df = pl.read_csv(
+    'data/March_Madness_Dataset.csv',
+    schema={'Year': pl.String,
+            'Round': pl.String,
+            'W_Seed': pl.String,
+            'W_Team': pl.String,
+            'W_Score': pl.String,
+            'L_Seed': pl.String,
+            'L_Team': pl.String,
+            'L_Score': pl.String,
+            'OT': pl.String}
+)
+# Strip whitespace from entire df
+df = df.with_columns(pl.all().str.strip_chars())
+# Convert str cols to ints or bool
+df = df.with_columns(
+    pl.col('Year').str.to_integer(),
+    pl.col('W_Score').str.to_integer(),
+    pl.col('L_Score').str.to_integer(),
+    pl.col('OT') == "1"
+)
+# Remove any play-in games
+df = df.filter(~pl.col('Round').str.contains('(?i)opening'))
+
+# Extract last digits
+df = df.with_columns(
+    pl.col('W_Score').mod(10).alias('W_Last_Digit'),
+    pl.col('L_Score').mod(10).alias('L_Last_Digit')
+)
+
+# Standardize round names
+round_col = pl.col('Round')
+df = df.with_columns(
+    pl.when(round_col.str.contains('64')).then(pl.lit('Round of 64'))
+    .when(round_col.str.contains('32')).then(pl.lit('Round of 32'))
+    .when(round_col.str.contains(r'(?i)sixteen|16')).then(pl.lit('Sweet 16'))
+    .when(round_col.str.contains(r'(?i)eight|8')).then(pl.lit('Elite 8'))
+    .when(round_col.str.contains(r'(?i)four|4')).then(pl.lit('Final 4'))
+    .when(round_col.str.contains(r'(?i)champion')).then(pl.lit('National Championship'))
+    .otherwise(round_col)
+    .alias('Round')
+)
+
+n = df.shape[0]
+
 
 def format_rounds(selected_rounds):
     """Format selected rounds by collapsing consecutive rounds into a range."""
@@ -77,23 +124,21 @@ def heatmap(df: pl.DataFrame, round_filter: list = None, annot: bool = True, cba
 
     heatmap_pd = heatmap_df.to_pandas().set_index("L_Last_Digit")
 
+
     fig, ax = plt.subplots(figsize=(24, 24), dpi=100)  # Init fig and ax
     annot_kws = {"size": fontsize} if fontsize else {}  # Adjust font size
     # Create heatmap
-    ax = sns.heatmap(heatmap_pd, cmap="coolwarm", annot=annot, annot_kws=annot_kws,
-                     fmt=".2%", linewidths=0.5,
-                     cbar=cbar, cbar_kws={'location': 'bottom', 'format': PercentFormatter(1, 2), 'ticks': LinearLocator(3)})
+    ax = sns.heatmap(
+        heatmap_pd, cmap="coolwarm", annot=annot, annot_kws=annot_kws,
+        fmt=".2%", linewidths=0.5, center=0.01,
+        cbar=cbar, cbar_kws={'location': 'bottom',
+                             'format': PercentFormatter(1, 2),
+                             'ticks': [np.min(heatmap_pd), 0.01, np.max(heatmap_pd)]}
+    )
     ax.tick_params(axis='both', labelsize=fontsize)  # Adjust tick font size
     ax.set_xlabel("Winning Team Last Digit")  # Add axes labels
     ax.set_ylabel("Losing Team Last Digit")  # Add axes labels
-    # Add sample size
-    if cbar:
-        cbar_ax = ax.collections[0].colorbar.ax
-        cbar_ax.text(.03, 1.25, f'N: {df.shape[0]}', transform=cbar_ax.transAxes,
-                  ha='center', va='top', fontsize=plt.rcParams["font.size"]*0.8)
-    else:
-        pass
-        ###TODO: add non-cbar-based N text location
+
     # Add title
     title = "Squares Probability Heatmap"  # Init title
     if round_filter:
@@ -101,54 +146,6 @@ def heatmap(df: pl.DataFrame, round_filter: list = None, annot: bool = True, cba
     ax.set_title(title)
 
     return fig, ax
-
-
-def process_data():
-    # Load dataset
-    df = pl.read_csv(
-        'data/March_Madness_Dataset.csv',
-        schema={'Year': pl.String,
-                'Round': pl.String,
-                'W_Seed': pl.String,
-                'W_Team': pl.String,
-                'W_Score': pl.String,
-                'L_Seed': pl.String,
-                'L_Team': pl.String,
-                'L_Score': pl.String,
-                'OT': pl.String}
-    )
-    # Strip whitespace from entire df
-    df = df.with_columns(pl.all().str.strip_chars())
-    # Convert str cols to ints or bool
-    df = df.with_columns(
-        pl.col('Year').str.to_integer(),
-        pl.col('W_Score').str.to_integer(),
-        pl.col('L_Score').str.to_integer(),
-        pl.col('OT') == "1"
-    )
-    # Remove any play-in games
-    df = df.filter(~pl.col('Round').str.contains('(?i)opening'))
-
-    # Extract last digits
-    df = df.with_columns(
-        pl.col('W_Score').mod(10).alias('W_Last_Digit'),
-        pl.col('L_Score').mod(10).alias('L_Last_Digit')
-    )
-
-    # Standardize round names
-    round_col = pl.col('Round')
-    df = df.with_columns(
-        pl.when(round_col.str.contains('64')).then(pl.lit('Round of 64'))
-        .when(round_col.str.contains('32')).then(pl.lit('Round of 32'))
-        .when(round_col.str.contains(r'(?i)sixteen|16')).then(pl.lit('Sweet 16'))
-        .when(round_col.str.contains(r'(?i)eight|8')).then(pl.lit('Elite 8'))
-        .when(round_col.str.contains(r'(?i)four|4')).then(pl.lit('Final 4'))
-        .when(round_col.str.contains(r'(?i)champion')).then(pl.lit('National Championship'))
-        .otherwise(round_col)
-        .alias('Round')
-    )
-
-    return df
 
 
 # Add page title and sidebar
@@ -170,6 +167,7 @@ app_ui = ui.page_sidebar(
                     choices=['Round of 64', 'Round of 32', 'Sweet 16', 'Elite 8', 'Final 4', 'National Championship'],
                     selected=['Round of 64', 'Round of 32', 'Sweet 16', 'Elite 8', 'Final 4', 'National Championship']
                 ),
+                ui.output_ui('years_ui'),
                 value='filters'
             ),
             open=False  # default the filter accordion to closed
@@ -182,7 +180,9 @@ app_ui = ui.page_sidebar(
             {"class": "square-plot-container"},
             ui.output_plot("heatmap_plot", height='95%', width='120%', click=True),
         ),
-        ui.div({"style": "float: left"}, ui.download_button("download_plot", "Download", width='100px', style='padding: 12px 0')),  # Download button
+        ui.div(
+            ui.div({"style": "float: left"}, ui.download_button("download_plot", "Download", width='100px', style='padding: 12px 0')),  # Download button
+            ui.div({'style': 'float: right' }, ui.output_text('sample_size')))
     ),
     fillable=True,
     fillable_mobile=True
@@ -193,17 +193,53 @@ def server(input, output, session):
     # Create reactive list for holding highlighted cell tuples
     highlight_cells = reactive.value([])
 
-    df = reactive.value(process_data())
+    df_react = reactive.value(df)
+    n_react = reactive.value(n)
+    notification = reactive.value(0)
+
+    @render.ui
+    def years_ui():
+        data = df
+        min_val = data['Year'].min()
+        max_val = data['Year'].max()
+        # Render the slider with dynamic min and max values
+        return ui.input_slider("years", "Years:", min=min_val, max=max_val, value=[min_val, max_val], sep='')
+
+    @render.text
+    def sample_size():
+        return f'N: {n_react.get()}'
 
     @reactive.effect
     def filter_df():
-        new_df = process_data()
+        new_df = df
         if input.rounds():
             new_df = new_df.filter(pl.col("Round").is_in(input.rounds()))
-        df.set(new_df)
+        miny, maxy = input.years()
+        new_df = new_df.filter(pl.col('Year').ge(miny) & pl.col('Year').le(maxy))
+        df_react.set(new_df)
+
+        new_n = new_df.shape[0]
+        n_react.set(new_n)
+
+        # Determine the new category
+        if new_n < 500:
+            new_notification = 2
+        elif new_n < 1000:
+            new_notification = 1
+        else:
+            new_notification = 0
+
+        # Only show a notification if the category has changed
+        if new_notification != notification.get():
+            notification.set(new_notification)
+
+            if new_notification == 2:
+                ui.notification_show("Sample size < 500. Display shows random variation.", type='error', duration=3)
+            elif new_notification == 1:
+                ui.notification_show("Sample size < 1000. Display shows random variation.", type='warning', duration=3)
 
     def generate_heatmap(fontsize=None):
-        fig, ax = heatmap(df.get(), input.rounds(), annot=input.annot(), cbar=input.cbar(), fontsize=fontsize)
+        fig, ax = heatmap(df_react.get(), input.rounds(), annot=input.annot(), cbar=input.cbar(), fontsize=fontsize)
         to_highlight = highlight_cells.get()
         if to_highlight:
             for (i, j) in to_highlight:
@@ -263,7 +299,6 @@ def server(input, output, session):
         plt.close(fig)  # Close the figure to free memory
 
         yield img_buffer.getvalue()
-
 
 
 app = App(app_ui, server)
