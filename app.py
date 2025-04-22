@@ -101,7 +101,7 @@ def format_rounds(selected_rounds):
     return ""
 
 
-def heatmap(df: pl.DataFrame, round_filter: list = None, annot: bool = True, cbar: bool = True, fontsize: None | int = None):
+def heatmap_df(df: pl.DataFrame):
     freq_table = df.group_by(["W_Last_Digit", "L_Last_Digit"]).agg(
         pl.len().alias("Count")
     ).sort(by=['W_Last_Digit', 'L_Last_Digit'])
@@ -122,18 +122,19 @@ def heatmap(df: pl.DataFrame, round_filter: list = None, annot: bool = True, cba
         on="W_Last_Digit"
     )
 
-    heatmap_pd = heatmap_df.to_pandas().set_index("L_Last_Digit")
+    return heatmap_df.to_pandas().set_index("L_Last_Digit")
 
+def heatmap(df: pl.DataFrame, round_filter: list = None, fontsize: None | int = None, **kwargs):
 
     fig, ax = plt.subplots(figsize=(24, 24), dpi=100)  # Init fig and ax
-    annot_kws = {"size": fontsize} if fontsize else {}  # Adjust font size
     # Create heatmap
     ax = sns.heatmap(
-        heatmap_pd, cmap="coolwarm", annot=annot, annot_kws=annot_kws,
-        fmt=".2%", linewidths=0.5, center=0.01,
-        cbar=cbar, cbar_kws={'location': 'bottom',
-                             'format': PercentFormatter(1, 2),
-                             'ticks': [np.min(heatmap_pd), 0.01, np.max(heatmap_pd)]}
+        df, cmap="coolwarm",
+        fmt="", linewidths=0.5, center=0.01,
+        cbar_kws={'location': 'bottom',
+                  'format': PercentFormatter(1, 2),
+                  'ticks': [np.min(df), 0.01, np.max(df)]},
+        **kwargs
     )
     ax.tick_params(axis='both', labelsize=fontsize)  # Adjust tick font size
     ax.set_xlabel("Winning Team Last Digit")  # Add axes labels
@@ -238,8 +239,11 @@ def server(input, output, session):
             elif new_notification == 1:
                 ui.notification_show("Sample size < 1000. Display shows random variation.", type='warning', duration=3)
 
-    def generate_heatmap(fontsize=None):
-        fig, ax = heatmap(df_react.get(), input.rounds(), annot=input.annot(), cbar=input.cbar(), fontsize=fontsize)
+    def generate_heatmap(fontsize=None, **kwargs):
+        df_heatmap = heatmap_df(df_react.get())
+        annot = np.vectorize(lambda x: f"{x * 100:.1f}")(df_heatmap) if input.annot() else False
+        annot_kws = {"size": fontsize} if fontsize else {}  # Adjust font size
+        fig, ax = heatmap(df_heatmap, input.rounds(), annot=annot, cbar=input.cbar(), annot_kws=annot_kws, **kwargs)
         to_highlight = highlight_cells.get()
         if to_highlight:
             for (i, j) in to_highlight:
@@ -291,8 +295,14 @@ def server(input, output, session):
 
     @render.download(filename="heatmap.png")
     def download_plot():
-        fig = generate_heatmap(fontsize=16)
-
+        # Get default font size
+        fs = plt.rcParams['font.size']
+        # Override default font size
+        plt.rcParams['font.size'] = 24
+        # Generate figure
+        fig = generate_heatmap(fontsize=24)
+        # Reset font size back to default
+        plt.rcParams['font.size'] = fs
         # Save the plot as a PNG image in memory
         img_buffer = BytesIO()
         fig.savefig(img_buffer, format="png", bbox_inches="tight", dpi=300)
