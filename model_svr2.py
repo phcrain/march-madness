@@ -1,21 +1,22 @@
-#TODO: add transformedtargetregressor from sklearn
-from xgboost import XGBRegressor
-from sklearn.metrics import make_scorer, mean_absolute_error, mean_squared_error
-from sklearn.preprocessing import PowerTransformer
+from sklearn.svm import SVR
 from sklearn.pipeline import Pipeline
-import joblib
-from sklearn.model_selection import TimeSeriesSplit, RandomizedSearchCV
+from sklearn.model_selection import RandomizedSearchCV, TimeSeriesSplit
+from sklearn.preprocessing import RobustScaler, PowerTransformer
 from scipy.stats import randint, loguniform
 from sklearn.feature_selection import SelectKBest, mutual_info_regression
+from sklearn.metrics import mean_squared_error, mean_absolute_error, make_scorer
+from math import floor, ceil
 from src import march_madness_data
 from src.team_stats import get_team_slug
 from src import tts
 import numpy as np
 import matplotlib.pyplot as plt
 import polars as pl
-from math import floor, ceil
+from sklearn.inspection import permutation_importance
+import joblib
 
 # --- Load data and preprocess ---
+
 # read in march madness data
 mm = march_madness_data()
 # row count for march madness dataset
@@ -178,41 +179,35 @@ y_train_t = pt.fit_transform(y_train.reshape(-1, 1)).ravel()
 X = mm.drop('Target_Spread')
 y = mm.select('Target_Spread')
 
+# Standardize data
+scaler = RobustScaler()
+
 # Init a time series cross-validator
 tss = TimeSeriesSplit(n_splits=3)
 
 # Init the regressor
-model = XGBRegressor(
-    random_state=123,
-    n_estimators=1000,
-    learning_rate=0.01,
-    colsample_bynode=0.5,
-    colsample_bytree=0.25,
-    max_delta_step=3,
-    min_child_weight=10,
-    seed=123
-)
+model = SVR(kernel='rbf')
 
 # Define the pipeline
 grid_pipeline = Pipeline([
+    ('scaler', RobustScaler()),
     ('selector', SelectKBest(score_func=mutual_info_regression)),
     ('model', model)
 ])
 
-# Define hyperparameter distributions
+# --- Train SVR with hyperparameter tuning ---
 param_dist = {
-    'selector__k': randint(floor(X_train.shape[1] * 0.25), ceil(X_train.shape[1] * 0.90)),
-    'model__max_depth': randint(2, 10),
-    'model__alpha': loguniform(0.01, 10),
-    'model__lambda': randint(1, 20),
+    'selector__k': randint(floor(X_train.shape[1] * 0.5), X_train.shape[1]),
+    'model__C': loguniform(0.01, 10),
+    'model__epsilon': loguniform(0.1, 10),
+    'model__gamma': ['scale', 'auto'],
 }
+
 # Use a regression scoring function
 scorer = make_scorer(mean_absolute_error, greater_is_better=False)
 
-# Init and fit grid search
-cv_search = RandomizedSearchCV(grid_pipeline, param_dist, n_iter=200, cv=tss, scoring=scorer,
-                               verbose=1, n_jobs=-1, random_state=124)
-cv_search.fit(X_train, y_train_t)
+cv_search = RandomizedSearchCV(grid_pipeline, param_dist, cv=tss, scoring=scorer, verbose=1, n_jobs=-1, n_iter=200)
+cv_search.fit(X_train, y_train)
 
 # Best hyperparameters
 print('Hyperparams:', cv_search.best_params_)
@@ -230,9 +225,9 @@ mse = mean_squared_error(y_test, y_pred)
 rmse = np.sqrt(mse)
 mae = mean_absolute_error(y_test, y_pred)
 
-print("MSE: %.2f" % mse)
-print("RMSE: %.2f" % rmse)
-print("MAE: %.2f" % mae)
+print("SVR MSE: %.2f" % mse)
+print("SVR RMSE: %.2f" % rmse)
+print("SVR MAE: %.2f" % mae)
 
 z = pl.concat([
     pl.DataFrame(y_pred, schema=['Pred_Spread']),
@@ -273,13 +268,14 @@ plt.savefig(f'model')
 best_model = best_estimator.named_steps['model']
 
 # Get feature importance from model
-importance_values = best_model.feature_importances_
+importance_rslt = permutation_importance(best_estimator, X_train, y_train_t, scoring=scorer, n_jobs=-1)
+importance_values = importance_rslt.importances_mean
 
 # Extract feature selection from pipeline
 selector = best_estimator.named_steps['selector']
 
 # Get features names from X
-importance_names = np.array(X_train.columns)[selector.get_support()]
+importance_names = X_train.columns
 
 # Map importance ratios to feature names
 importance_df = (
@@ -287,6 +283,9 @@ importance_df = (
     pl.DataFrame({'Feature': importance_names, 'Importance': importance_values})
     # Remove features that had 0 importance
     .filter(pl.col('Importance') > 0)
+    # Get importance as ratio of importance over total importance
+    # (where importance eq mean MAE increase with feature removal)
+    .with_columns(pl.col('Importance').truediv(pl.col('Importance').sum()).alias('Importance'))
     # Sort feature importance from highest to lowest
     .sort('Importance', descending=True)
 )
@@ -325,6 +324,7 @@ joblib.dump({'pipeline': best_estimator,
 # print('Mean Absolute Error:', metadata['mean_absolute_error'])
 # print('Feature Names:', metadata['feature_names'])
 # print('Feature Importance:', metadata['feature_importance'])
+# print('CV Search Paramters:', metadata['cvsearch_params'])
 #
 # # Predict on new data
 # # Where `z` is new data
