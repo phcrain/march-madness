@@ -893,9 +893,9 @@ def combine_stats():
     model training.
     """
     df = combine('data/season_stats/bart_stats',
-                 #'data/season_stats/opp_bart_stats',
+                 'data/season_stats/opp_bart_stats',
                  'data/season_stats/advanced_stats',
-                 #'data/season_stats/basic_stats',
+                 'data/season_stats/basic_stats',
                  'data/season_stats/last5_stats',
                  'data/player_stats')
 
@@ -916,7 +916,7 @@ def combine_stats():
     df = df.drop('conf_Other')
 
     # Save combined file
-    df.write_parquet('data/combined_stats3.parquet')
+    df.write_parquet('data/combined_stats.parquet')
 
 
 def join_bart(team: str, year: int | str) -> pl.LazyFrame:
