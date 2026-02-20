@@ -11,7 +11,7 @@ PIPELINE = saved_model['pipeline']
 
 ESPN_URL = 'https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard'
 DEFAULT_LOGO = 'https://upload.wikimedia.org/wikipedia/commons/a/a3/Image-not-found.png'
-TODAY = date.today() - timedelta(330)
+TODAY = date.today()
 
 ROUND_RAW_DICT = {
     'First Four': 'First Four',
