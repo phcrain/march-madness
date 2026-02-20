@@ -6,51 +6,16 @@ import numpy as np
 from math import floor
 from io import BytesIO
 from matplotlib.ticker import PercentFormatter
+from src.march_madness_data import march_madness_data, round_dict
+from src.todays_scores import predict_next_games
+import time
 
-# Load dataset
-df = pl.read_csv(
-    'data/March_Madness_Dataset.csv',
-    schema={'Year': pl.String,
-            'Round': pl.String,
-            'W_Seed': pl.String,
-            'W_Team': pl.String,
-            'W_Score': pl.String,
-            'L_Seed': pl.String,
-            'L_Team': pl.String,
-            'L_Score': pl.String,
-            'OT': pl.String}
+df = (
+    march_madness_data()
+    .with_columns(pl.col(f'{pre}_Score').mod(10).alias(f'{pre}_Last_Digit') for pre in ['Self', 'Opp'])
+    .with_columns(pl.col('Round').replace_strict({v: k for k, v in round_dict.items()}, default=''))
+    .collect()
 )
-# Strip whitespace from entire df
-df = df.with_columns(pl.all().str.strip_chars())
-# Convert str cols to ints or bool
-df = df.with_columns(
-    pl.col('Year').str.to_integer(),
-    pl.col('W_Score').str.to_integer(),
-    pl.col('L_Score').str.to_integer(),
-    pl.col('OT') == "1"
-)
-# Remove any play-in games
-df = df.filter(~pl.col('Round').str.contains('(?i)opening'))
-
-# Extract last digits
-df = df.with_columns(
-    pl.col('W_Score').mod(10).alias('W_Last_Digit'),
-    pl.col('L_Score').mod(10).alias('L_Last_Digit')
-)
-
-# Standardize round names
-round_col = pl.col('Round')
-df = df.with_columns(
-    pl.when(round_col.str.contains('64')).then(pl.lit('Round of 64'))
-    .when(round_col.str.contains('32')).then(pl.lit('Round of 32'))
-    .when(round_col.str.contains(r'(?i)sixteen|16')).then(pl.lit('Sweet 16'))
-    .when(round_col.str.contains(r'(?i)eight|8')).then(pl.lit('Elite 8'))
-    .when(round_col.str.contains(r'(?i)four|4')).then(pl.lit('Final 4'))
-    .when(round_col.str.contains(r'(?i)champion')).then(pl.lit('National Championship'))
-    .otherwise(round_col)
-    .alias('Round')
-)
-
 n = df.shape[0]
 
 
@@ -58,20 +23,20 @@ def format_rounds(selected_rounds):
     """Format selected rounds by collapsing consecutive rounds into a range."""
 
     if selected_rounds is None:
-        return ""
+        return ''
 
-    all_rounds = ["Round of 64",
-                  "Round of 32",
-                  "Sweet 16",
-                  "Elite 8",
-                  "Final 4",
-                  "National Championship"]
+    all_rounds = ['Round of 64',
+                  'Round of 32',
+                  'Sweet 16',
+                  'Elite 8',
+                  'Final 4',
+                  'National Championship']
 
     # Sort selected rounds
     selected_rounds = sorted(selected_rounds, key=lambda x: all_rounds.index(x))
 
     if selected_rounds == all_rounds:
-        return ""
+        return ''
 
     formatted_rounds = []
     temp_range = [selected_rounds[0]]
@@ -84,64 +49,65 @@ def format_rounds(selected_rounds):
             temp_range.append(current_round)
         else:
             if len(temp_range) >= 3:
-                formatted_rounds.append(f"{temp_range[0]} - {temp_range[-1]}")
+                formatted_rounds.append(f'{temp_range[0]} - {temp_range[-1]}')
             else:
                 formatted_rounds.extend(temp_range)
             temp_range = [current_round]
 
     # Handle the last range
     if len(temp_range) >= 3:
-        formatted_rounds.append(f"{temp_range[0]} - {temp_range[-1]}")
+        formatted_rounds.append(f'{temp_range[0]} - {temp_range[-1]}')
     else:
         formatted_rounds.extend(temp_range)
 
     if formatted_rounds:
         return f"\n({', '.join(formatted_rounds)})"
 
-    return ""
+    return ''
 
 
 def heatmap_df(df: pl.DataFrame):
-    freq_table = df.group_by(["W_Last_Digit", "L_Last_Digit"]).agg(
-        pl.len().alias("Count")
-    ).sort(by=['W_Last_Digit', 'L_Last_Digit'])
+    freq_table = df.group_by(['Self_Last_Digit', 'Opp_Last_Digit']).agg(
+        pl.len().alias('Count')
+    ).sort(by=['Self_Last_Digit', 'Opp_Last_Digit'])
 
     freq_table = freq_table.with_columns(
-        (pl.col("Count") / df.shape[0]).alias("Probability")
+        (pl.col('Count') / df.shape[0]).alias('Probability')
     )
 
     all_digits = pl.DataFrame({
-        "W_Last_Digit": np.tile(np.arange(10), 10),
-        "L_Last_Digit": np.repeat(np.arange(10), 10),
+        'Self_Last_Digit': np.tile(np.arange(10), 10),
+        'Opp_Last_Digit': np.repeat(np.arange(10), 10),
     })
-    freq_table = all_digits.join(freq_table, on=["W_Last_Digit", "L_Last_Digit"], how="left").fill_null(0)
+    freq_table = all_digits.join(freq_table, on=['Self_Last_Digit', 'Opp_Last_Digit'], how='left').fill_null(0)
 
     heatmap_df = freq_table.pivot(
-        values="Probability",
-        index="L_Last_Digit",
-        on="W_Last_Digit"
+        values='Probability',
+        index='Opp_Last_Digit',
+        on='Self_Last_Digit'
     )
 
-    return heatmap_df.to_pandas().set_index("L_Last_Digit")
+    return heatmap_df.to_pandas().set_index('Opp_Last_Digit')
+
 
 def heatmap(df: pl.DataFrame, round_filter: list = None, fontsize: None | int = None, **kwargs):
 
     fig, ax = plt.subplots(figsize=(24, 24), dpi=100)  # Init fig and ax
     # Create heatmap
     ax = sns.heatmap(
-        df, cmap="coolwarm",
-        fmt="", linewidths=0.5, center=0.01,
+        df, cmap='coolwarm',
+        fmt='', linewidths=0.5, center=0.01,
         cbar_kws={'location': 'bottom',
                   'format': PercentFormatter(1, 2),
                   'ticks': [np.min(df), 0.01, np.max(df)]},
         **kwargs
     )
     ax.tick_params(axis='both', labelsize=fontsize)  # Adjust tick font size
-    ax.set_xlabel("Winning Team Last Digit")  # Add axes labels
-    ax.set_ylabel("Losing Team Last Digit")  # Add axes labels
+    ax.set_xlabel('Winning Team Last Digit')  # Add axes labels
+    ax.set_ylabel('Losing Team Last Digit')  # Add axes labels
 
     # Add title
-    title = "Squares Probability Heatmap"  # Init title
+    title = 'Squares Probability Heatmap'  # Init title
     if round_filter:
         title += format_rounds(round_filter)
     ax.set_title(title)
@@ -149,44 +115,73 @@ def heatmap(df: pl.DataFrame, round_filter: list = None, fontsize: None | int = 
     return fig, ax
 
 
+def winner(score_x, score_y):
+    if score_x > score_y:
+        return 'winner'
+    return ''
+
+
 # Add page title and sidebar
-app_ui = ui.page_sidebar(
-    ui.sidebar(
-        # Option to show or hide annotations in figure
-        ui.input_switch('annot', 'Display Frequencies', value=False),
-        ui.input_switch('cbar', 'Display Colorbar', value=True),
-        # Option to highlight cells on click
-        ui.input_switch("enable_clicks", "Click to Highlight", value=True),
-        # Accordion layout to collapse filters
-        ui.accordion(
-            # Option to filter figure's underlying df
-            ui.accordion_panel(
-                ui.HTML("Filters"),  # Collapsible Filters section
-                ui.input_checkbox_group(
-                    id="rounds",
-                    label="Rounds:",
-                    choices=['Round of 64', 'Round of 32', 'Sweet 16', 'Elite 8', 'Final 4', 'National Championship'],
-                    selected=['Round of 64', 'Round of 32', 'Sweet 16', 'Elite 8', 'Final 4', 'National Championship']
+app_ui = ui.page_navbar(
+
+    # Heatmap
+    ui.nav_panel(
+        'Squares Heatmap',
+        ui.page_sidebar(
+            ui.sidebar(
+                # your existing controls unchanged
+                ui.input_switch('annot', 'Display Frequencies', value=False),
+                ui.input_switch('cbar', 'Display Colorbar', value=True),
+                ui.input_switch('enable_clicks', 'Click to Highlight', value=True),
+
+                ui.accordion(
+                    ui.accordion_panel(
+                        ui.HTML('Filters'),
+                        ui.input_checkbox_group(
+                            id='rounds',
+                            label='Rounds:',
+                            choices=[
+                                'Round of 64','Round of 32','Sweet 16',
+                                'Elite 8','Final 4','National Championship'
+                            ],
+                            selected=[
+                                'Round of 64','Round of 32','Sweet 16',
+                                'Elite 8','Final 4','National Championship'
+                            ]
+                        ),
+                        ui.output_ui('years_ui'),
+                        value='filters'
+                    ),
+                    open=False
                 ),
-                ui.output_ui('years_ui'),
-                value='filters'
+                open='desktop'
             ),
-            open=False  # default the filter accordion to closed
-        ),
-        open='desktop'
+
+            # your existing main content unchanged
+            ui.include_css('www/styles.css'),
+            ui.div(
+                ui.div(
+                    {'class': 'square-plot-container'},
+                    ui.output_plot('heatmap_plot', height='95%', width='120%', click=True),
+                ),
+                ui.div(
+                    ui.div({'style': 'float: left'},
+                           ui.download_button('download_plot', 'Download',
+                                              width='100px', style='padding: 12px 0')),
+                    ui.div({'style': 'float: right'}, ui.output_text('sample_size'))
+                )
+            ),
+            fillable=True,
+            fillable_mobile=True
+        )
     ),
-    ui.include_css("www/styles.css"),
-    ui.div(
-        ui.div(
-            {"class": "square-plot-container"},
-            ui.output_plot("heatmap_plot", height='95%', width='120%', click=True),
-        ),
-        ui.div(
-            ui.div({"style": "float: left"}, ui.download_button("download_plot", "Download", width='100px', style='padding: 12px 0')),  # Download button
-            ui.div({'style': 'float: right' }, ui.output_text('sample_size')))
-    ),
-    fillable=True,
-    fillable_mobile=True
+
+    # Upcoming games
+    ui.nav_panel(
+        'Upcoming Games',
+        ui.h3('Live Predictions'),
+        ui.output_ui('today_games_ui')
+    )
 )
 
 
@@ -204,7 +199,7 @@ def server(input, output, session):
         min_val = data['Year'].min()
         max_val = data['Year'].max()
         # Render the slider with dynamic min and max values
-        return ui.input_slider("years", "Years:", min=min_val, max=max_val, value=[min_val, max_val], sep='')
+        return ui.input_slider('years', 'Years:', min=min_val, max=max_val, value=[min_val, max_val], sep='')
 
     @render.text
     def sample_size():
@@ -214,7 +209,7 @@ def server(input, output, session):
     def filter_df():
         new_df = df
         if input.rounds():
-            new_df = new_df.filter(pl.col("Round").is_in(input.rounds()))
+            new_df = new_df.filter(pl.col('Round').is_in(input.rounds()))
         miny, maxy = input.years()
         new_df = new_df.filter(pl.col('Year').ge(miny) & pl.col('Year').le(maxy))
         df_react.set(new_df)
@@ -235,14 +230,14 @@ def server(input, output, session):
             notification.set(new_notification)
 
             if new_notification == 2:
-                ui.notification_show("Sample size < 500. Display shows random variation.", type='error', duration=3)
+                ui.notification_show('Sample size < 500. Display shows random variation.', type='error', duration=3)
             elif new_notification == 1:
-                ui.notification_show("Sample size < 1000. Display shows random variation.", type='warning', duration=3)
+                ui.notification_show('Sample size < 1000. Display shows random variation.', type='warning', duration=3)
 
     def generate_heatmap(fontsize=None, **kwargs):
         df_heatmap = heatmap_df(df_react.get())
-        annot = np.vectorize(lambda x: f"{x * 100:.1f}")(df_heatmap) if input.annot() else False
-        annot_kws = {"size": fontsize} if fontsize else {}  # Adjust font size
+        annot = np.vectorize(lambda x: f'{x * 100:.1f}')(df_heatmap) if input.annot() else False
+        annot_kws = {'size': fontsize} if fontsize else {}  # Adjust font size
         fig, ax = heatmap(df_heatmap, input.rounds(), annot=annot, cbar=input.cbar(), annot_kws=annot_kws, **kwargs)
         to_highlight = highlight_cells.get()
         if to_highlight:
@@ -265,13 +260,13 @@ def server(input, output, session):
         click_data = input.heatmap_plot_click()
 
         # Print debugging info
-        print(f"Clicked raw: {click_data}")
+        print(f'Clicked raw: {click_data}')
 
         if click_data:
             if click_data['domain']['right'] == 1:
                 return None  # Exit if key/gradient was clicked instead of heatmap cells
             # Extract raw click coordinates
-            raw_x, raw_y = click_data["x"], click_data["y"]
+            raw_x, raw_y = click_data['x'], click_data['y']
 
             # Ensure valid numeric values
             if raw_x is None or raw_y is None:
@@ -293,7 +288,7 @@ def server(input, output, session):
 
                 highlight_cells.set(new_cells)  # Update highlight list
 
-    @render.download(filename="heatmap.png")
+    @render.download(filename='heatmap.png')
     def download_plot():
         # Get default font size
         fs = plt.rcParams['font.size']
@@ -305,10 +300,69 @@ def server(input, output, session):
         plt.rcParams['font.size'] = fs
         # Save the plot as a PNG image in memory
         img_buffer = BytesIO()
-        fig.savefig(img_buffer, format="png", bbox_inches="tight", dpi=300)
+        fig.savefig(img_buffer, format='png', bbox_inches='tight', dpi=300)
         plt.close(fig)  # Close the figure to free memory
 
         yield img_buffer.getvalue()
+
+    @reactive.poll(lambda: int(time.time() // 300), 300)
+    def today_games():
+        return predict_next_games()
+
+    @output
+    @render.ui
+    def today_games_ui():
+        games = today_games()
+
+        if games is None:
+            return ui.p('No games this week.')
+
+        days = games.partition_by('Date', as_dict=True)
+
+        ui_blocks = []
+
+        for game_date, day_df in days.items():
+            ui_blocks.append(
+                ui.div(
+                    game_date[0].strftime('%A, %B %d'),
+                    class_='games-date-header'
+                )
+            )
+
+            for g in day_df.iter_rows(named=True):
+                ui_blocks.append(
+                    ui.div(
+                        {'class': 'game-card'},
+                        ui.div(g['EventName'], class_='game-title'),
+                        ui.div(
+                            {'class': 'teams-row'},
+
+                            # Team A
+                            ui.div(
+                                {
+                                    'class': f"team-block {winner(g['A_Score'], g['B_Score'])}"
+                                },
+                                ui.img(src=g['A_Team_Logo'], class_='team-logo'),
+                                ui.div(g['A_Team'], class_='team-name'),
+                                ui.div(str(g['A_Score']), class_='team-score'),
+                                ui.div(f"Pred: {g['A_Pred_Score']}", class_='team-pred'),
+                            ),
+
+                            # Team B
+                            ui.div(
+                                {
+                                    'class': f"team-block {winner(g['B_Score'], g['A_Score'])}"
+                                },
+                                ui.img(src=g['B_Team_Logo'], class_='team-logo'),
+                                ui.div(g['B_Team'], class_='team-name'),
+                                ui.div(str(g['B_Score']), class_='team-score'),
+                                ui.div(f"Pred: {g['B_Pred_Score']}", class_='team-pred'),
+                            ),
+                        ),
+                    )
+                )
+
+        return ui.TagList(ui_blocks)
 
 
 app = App(app_ui, server)
