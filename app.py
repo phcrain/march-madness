@@ -12,6 +12,7 @@ import time
 
 df = (
     march_madness_data()
+    .filter(pl.col('Self_Score').gt(pl.col('Opp_Score')))
     .with_columns(pl.col(f'{pre}_Score').mod(10).alias(f'{pre}_Last_Digit') for pre in ['Self', 'Opp'])
     .with_columns(pl.col('Round').replace_strict({v: k for k, v in round_dict.items()}, default=''))
     .collect()
@@ -81,13 +82,13 @@ def heatmap_df(df: pl.DataFrame):
     })
     freq_table = all_digits.join(freq_table, on=['Self_Last_Digit', 'Opp_Last_Digit'], how='left').fill_null(0)
 
-    heatmap_df = freq_table.pivot(
+    output_df = freq_table.pivot(
         values='Probability',
         index='Opp_Last_Digit',
         on='Self_Last_Digit'
     )
 
-    return heatmap_df.to_pandas().set_index('Opp_Last_Digit')
+    return output_df.to_pandas().set_index('Opp_Last_Digit')
 
 
 def heatmap(df: pl.DataFrame, round_filter: list = None, fontsize: None | int = None, **kwargs):
@@ -131,6 +132,16 @@ app_ui = ui.page_navbar(
             ui.sidebar(
                 # your existing controls unchanged
                 ui.input_switch('annot', 'Display Frequencies', value=False),
+                ui.panel_conditional(
+                    'input.annot',
+                    ui.input_slider(
+                        'annot_digits',
+                        'Precision:',
+                        min=1,
+                        max=4,
+                        value=1
+                    )
+                ),
                 ui.input_switch('cbar', 'Display Colorbar', value=True),
                 ui.input_switch('enable_clicks', 'Click to Highlight', value=True),
 
@@ -236,7 +247,12 @@ def server(input, output, session):
 
     def generate_heatmap(fontsize=None, **kwargs):
         df_heatmap = heatmap_df(df_react.get())
-        annot = np.vectorize(lambda x: f'{x * 100:.1f}')(df_heatmap) if input.annot() else False
+        print(input.annot_digits())
+        if input.annot():
+            digits = input.annot_digits()
+            annot = np.vectorize(lambda x: f"{x * 100:.{digits}f}")(df_heatmap)
+        else:
+            annot = False
         annot_kws = {'size': fontsize} if fontsize else {}  # Adjust font size
         fig, ax = heatmap(df_heatmap, input.rounds(), annot=annot, cbar=input.cbar(), annot_kws=annot_kws, **kwargs)
         to_highlight = highlight_cells.get()

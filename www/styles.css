@@ -63,6 +63,10 @@
 }
 
 .games-date-header {
+  position: sticky;
+  top: 0;
+  background: white;
+  z-index: 5;
   font-size: 1.1rem;
   font-weight: 700;
   margin-top: 16px;
