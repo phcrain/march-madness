@@ -21,6 +21,10 @@ df = (
 n = df.shape[0]
 year = date.today().year - 1
 
+ROUND_NAMES = ['Round of 64', 'Round of 32', 'Sweet 16', 'Elite 8', 'Final 4', 'Championship']
+
+# Initial bracket round
+current_bracket_round = reactive.Value(0)
 
 def team_row(row, team_prefix: str):
     """Render team-row UI for bracket display"""
@@ -259,8 +263,9 @@ app_ui = ui.page_navbar(
 
     # Bracket with predictions
     ui.nav_panel(
-        'Bracket',
-        ui.output_ui('bracket_ui')
+        'Predicted Bracket',
+        ui.output_ui('bracket_ui'),
+        ui.output_ui('bracket_position')
     )
 )
 
@@ -463,76 +468,86 @@ def server(input, output, session):
             'National Championship',
         ]
 
-        BASE_GAME_HEIGHT = 120
-
-        # spacing multiplier per round
-        round_spacing = {
-            'Round of 64': 1,
-            'Round of 32': 2,
-            'Sweet 16': 4,
-            'Elite 8': 8,
-            'Final 4': 16,
-            'National Championship': 32,
-        }
-
-        # spacing offset per round
-        round_offset = {
-            'Round of 64': 0,
-            'Round of 32': 0.5,
-            'Sweet 16': 1.5,
-            'Elite 8': 3.5,
-            'Final 4': 7.5,
-            'National Championship': 15.5,
-        }
-
         if df_bracket is None:
             return ui.div('No bracket data')
 
-        round_columns = []
-
-        # ==========================================================
-        # BUILD ROUNDS
-        # ==========================================================
-
-        for r_index, rnd in enumerate(rounds):
-
-            spacing = BASE_GAME_HEIGHT * round_spacing[rnd]
-            offset = BASE_GAME_HEIGHT * round_offset[rnd]
-
+        # Build rounds divs
+        round_pages = []
+        for rnd in rounds:
             games = (
                 df_bracket
                 .filter(pl.col('Round') == rnd)
                 .sort('key')
             )
 
-            game_blocks = []
-
-            for g_index, row in enumerate(games.iter_rows(named=True)):
-                top_position = top_position = g_index * spacing + offset
-
-                game_blocks.append(
+            # Build games divs
+            game_cards = []
+            for row in games.iter_rows(named=True):
+                print('Region', type(row['A_Region']))
+                if rnd in ['Round of 64', 'Round of 32', 'Sweet 16', 'Elite 8']:
+                    region = (row['A_Region'] + 1) % 2 + 1
+                else:
+                    region = 1
+                game_cards.append(
                     ui.div(
-                        {
-                            'class': 'matchup',
-                            'style': f'top:{top_position}px;'
-                        },
-                        ui.div(
-                            {'class': 'matchup-inner'},
-                            team_row(row, 'A'),
-                            team_row(row, 'B'),
-                        )
+                        {'class': f'game-card region-{region}'},
+                        team_row(row, 'A'),
+                        team_row(row, 'B'),
                     )
                 )
 
-            round_columns.append(
+            round_pages.append(
                 ui.div(
-                    {'class': 'round-column-abs'},
-                    ui.h4(rnd),
-                    *game_blocks
+                    {'class': 'round-page'},
+                    *game_cards
                 )
             )
 
-        return ui.div({'class': 'bracket-root'}, *round_columns)
+        return ui.div(
+            {'class': 'bracket-wrapper'},
+            ui.div(
+                {'class': 'nav-buttons'},
+                ui.input_action_button(id='prev_round', label='←', class_='nav-left'),
+                ui.div(
+                    {'class': 'round-header'},
+                    ui.output_text('round_header'),
+                ),
+                ui.input_action_button(id='next_round', label='→', class_='nav-right'),
+            ),
+            ui.div({'class': 'bracket-carousel'}, *round_pages),
+        )
+
+
+    @reactive.Effect
+    @reactive.event(input.prev_round)
+    def _():
+        i = max(0, current_bracket_round.get() - 1)
+        current_bracket_round.set(i)
+
+    @reactive.Effect
+    @reactive.event(input.next_round)
+    def _():
+        max_rounds = len(ROUND_NAMES)
+        i = min(max_rounds - 1, current_bracket_round.get() + 1)
+        current_bracket_round.set(i)
+
+    @output
+    @render.ui
+    def bracket_position():
+        idx = current_bracket_round.get()
+        return ui.tags.style(
+            f"""
+            .bracket-carousel {{
+                transform: translateX(-{idx * 100}%);
+                transition: transform 0.3s ease;
+            }}
+            """
+        )
+
+    @output
+    @render.text
+    def round_header():
+        return ROUND_NAMES[current_bracket_round.get()]
 
 
 app = App(app_ui, server)
