@@ -364,8 +364,9 @@ def predict_bracket(year):
         pl.when(pl.col('Round').is_in(['Round of 64', 'Round of 32', 'Sweet 16']))
         .then(
             pl.concat_str([
+                pl.col('Round').replace({'Round of 64': '1', 'Round of 32': '1', 'Sweet 16': '2'}),
                 pl.col('W_Region'),
-                pl.col('Round'),
+                pl.lit('_'),
                 (
                     pl.struct('W_Seed', 'Round')
                     .map_elements(
@@ -377,11 +378,11 @@ def predict_bracket(year):
             ])
         )
         .when(pl.col('Round') == 'Elite 8')
-        .then(pl.concat_str(pl.col('W_Region'), pl.col('Round')))
+        .then(pl.concat_str(pl.lit('3'), pl.col('W_Region')))
         .when(pl.col('Round') == 'Final 4')
-        .then(pl.when(pl.col('W_Region').lt(3)).then(pl.lit('1.2')).otherwise(pl.lit('3.4')))
+        .then(pl.when(pl.col('W_Region').lt(3)).then(pl.lit('412')).otherwise(pl.lit('434')))
         .when(pl.col('Round') == 'National Championship')
-        .then(pl.lit('NATTY'))
+        .then(pl.lit('5'))
         .alias('key')
     )
 
@@ -397,11 +398,49 @@ def predict_bracket(year):
         .with_columns(key_expr_2)
         .rename(lambda x: x.replace('W_', 'A_'))
         .join(scores_exist, on='key', how='left')
-        .drop('key')
+        #.drop('key')
         .with_columns(pl.col('game_played').fill_null(False))
     )
 
-    return combined_df.collect()
+    BRACKET_SLOTS = {
+        'Round of 64': {
+            '1.16': '1',
+            '8.9': '2',
+            '12.5': '3',
+            '13.4': '4',
+            '11.6': '5',
+            '14.3': '6',
+            '10.7': '7',
+            '15.2': '8',
+        },
+        'Round of 32': {
+            '1.16.8.9': '1',
+            '12.13.4.5': '2',
+            '11.14.3.6': '3',
+            '10.15.2.7': '4',
+        },
+        'Sweet 16': {
+            '1.12.13.16.4.5.8.9': '1',
+            '10.11.14.15.2.3.6.7': '2',
+        }
+    }
+
+    combined_df_sorted = (
+        combined_df
+        .with_columns(pl.col('key').str.replace(r'^.+_', '').alias('opp_suff'))
+        .with_columns(
+            pl.struct('opp_suff', 'Round').map_elements(
+                lambda x: BRACKET_SLOTS.get(x['Round'], {}).get(x['opp_suff'], '')
+                if x['Round'] in ['Round of 64', 'Round of 32', 'Sweet 16'] else '1',
+                pl.String
+            ).alias('opp_suff')
+        )
+        .with_columns(pl.col('key').str.replace(r'_.+', pl.col('opp_suff')))
+        .drop('opp_suff')
+        .sort('key')
+    )
+
+    return combined_df_sorted.collect()
 
 
 def predict_next_games(df: pl.DataFrame) -> pl.DataFrame | None:
@@ -429,7 +468,7 @@ def predict_next_games(df: pl.DataFrame) -> pl.DataFrame | None:
         predictions = PIPELINE.predict(data)
         pred_df = (
             pl.DataFrame({'ID': data['GameID'], 'Pred_Score': predictions})
-            .with_columns(pl.col('Pred_Score').round().cast(pl.Int16))
+            .with_columns(pl.col('Pred_Score').round(1).cast(pl.String))
         )
         return (
             df
