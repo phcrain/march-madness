@@ -22,6 +22,67 @@ n = df.shape[0]
 year = date.today().year - 1
 
 
+def team_row(row, team_prefix: str):
+    """Render team-row UI for bracket display"""
+    team = row[f'{team_prefix}_Team']
+    seed = row[f'{team_prefix}_Seed']
+    score = row[f'{team_prefix}_Score']
+    pred_score = row[f'{team_prefix}_Pred_Score']
+
+    pred_winner = row['Pred_Winner']
+    pred_loser = row['Pred_Loser']
+    actual_winner = row['winner']
+    actual_loser = row['loser']
+    game_played = row['game_played']
+    pred_correct = row['Prediction_Correct']
+
+    classes = []
+    strike = False
+
+    # determine "winner"
+    if game_played and actual_winner:
+        true_winner = actual_winner
+    else:
+        true_winner = pred_winner
+
+    if team == true_winner:
+        classes.append('winner-bold')
+
+    if game_played and actual_loser:
+        true_loser = actual_loser
+    else:
+        true_loser = pred_loser
+
+    # add classes for shading prediction accuracy
+    if game_played and team == pred_winner:
+        if pred_correct is True:
+            classes.append('correct')
+        elif pred_correct is False:
+            classes.append('incorrect')
+
+    # future elimination detection
+    if (
+            actual_winner is not None
+            and team != true_winner
+            and team != true_loser
+    ):
+        classes.append('eliminated')
+
+    class_str = ' '.join(classes)
+
+    return ui.div(
+        {'class': f'team {class_str}'},
+        ui.div(f'{seed} {team}', class_='team-name'),
+        ui.div(
+            [
+                f'Score: {score}  | ' if score is not None else '',
+                f'Pred: {pred_score}' if pred_score is not None else ''
+            ],
+            class_='team-score',
+        ),
+    )
+
+
 def format_rounds(selected_rounds):
     """Format selected rounds by collapsing consecutive rounds into a range."""
 
@@ -404,7 +465,7 @@ def server(input, output, session):
 
         BASE_GAME_HEIGHT = 120
 
-        # spacing multiplier per round (ESPN trick)
+        # spacing multiplier per round
         round_spacing = {
             'Round of 64': 1,
             'Round of 32': 2,
@@ -414,7 +475,7 @@ def server(input, output, session):
             'National Championship': 32,
         }
 
-        # spacing multiplier per round (ESPN trick)
+        # spacing offset per round
         round_offset = {
             'Round of 64': 0,
             'Round of 32': 0.5,
@@ -428,70 +489,6 @@ def server(input, output, session):
             return ui.div('No bracket data')
 
         round_columns = []
-
-        # ==========================================================
-        # TEAM ROW RENDERER
-        # ==========================================================
-        def team_row(row, team_prefix):
-            team = row[f'{team_prefix}_Team']
-            seed = row[f'{team_prefix}_Seed']
-            score = row[f'{team_prefix}_Score']
-            pred_score = row[f'{team_prefix}_Pred_Score']
-
-            pred_winner = row['Pred_Winner']
-            actual_winner = row['winner']
-            game_played = row['game_played']
-            pred_correct = row['Prediction_Correct']
-
-            classes = []
-            strike = False
-
-            # -----------------------------
-            # determine true winner
-            # -----------------------------
-            if game_played and actual_winner:
-                true_winner = actual_winner
-            else:
-                true_winner = pred_winner
-
-            if team == true_winner:
-                classes.append('winner-bold')
-
-            # -----------------------------
-            # prediction coloring
-            # -----------------------------
-            if game_played and team == pred_winner:
-                if pred_correct is True:
-                    classes.append('correct')
-                elif pred_correct is False:
-                    classes.append('incorrect')
-
-            # -----------------------------
-            # future elimination detection
-            # -----------------------------
-            if (
-                    not game_played
-                    and actual_winner is not None
-                    and team == pred_winner
-                    and pred_correct is False
-            ):
-                classes.append('eliminated')
-                strike = True
-
-            label = ui.tags.s(team) if strike else team
-            class_str = ' '.join(classes)
-
-            return ui.div(
-                {'class': f'team {class_str}'},
-                ui.div(f'{seed} {label}', class_='team-name'),
-                ui.div(
-                    [
-                        f'Score: {score}' if score is not None else '',
-                        f' | Pred: {pred_score}' if pred_score is not None else ''
-                    ],
-                    class_='team-score',
-                ),
-            )
 
         # ==========================================================
         # BUILD ROUNDS

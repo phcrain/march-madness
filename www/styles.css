@@ -118,5 +118,6 @@
 }
 
 .eliminated {
-  color: #9aa0a6;
+  color: #5e4040;
+  text-decoration: line-through;
 }

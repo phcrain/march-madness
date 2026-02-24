@@ -353,7 +353,12 @@ def predict_bracket(year):
             pl.when(pl.col('A_Team_Win'))
             .then(pl.col('A_Team'))
             .otherwise(pl.col('B_Team'))
-            .alias('Pred_Winner')
+            .alias('Pred_Winner'),
+            pl.when(pl.col('A_Team_Win'))
+            .then(pl.col('B_Team'))
+            .otherwise(pl.col('A_Team'))
+            .alias('Pred_Loser'),
+
         )
         .join(w_teams, left_on=['Round', 'Pred_Winner'], right_on=['Round', 'winner'], how='left')
         .with_columns(pl.col('Prediction_Correct').fill_null(False))
