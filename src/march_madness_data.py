@@ -10,6 +10,18 @@ import rapidfuzz as rf
 import datetime
 
 
+def round_regex(round_col: str) -> pl.Expr:
+    return (
+        pl.when(pl.col(round_col).str.contains('64')).then(pl.lit('Round of 64'))
+        .when(pl.col(round_col).str.contains('32')).then(pl.lit('Round of 32'))
+        .when(pl.col(round_col).str.contains(r'(?i)sixteen|16')).then(pl.lit('Sweet 16'))
+        .when(pl.col(round_col).str.contains(r'(?i)eight|8')).then(pl.lit('Elite 8'))
+        .when(pl.col(round_col).str.contains(r'(?i)final four|final 4')).then(pl.lit('Final 4'))
+        .when(pl.col(round_col).str.contains(r'(?i)champion')).then(pl.lit('National Championship'))
+        .otherwise(pl.col(round_col))
+    )
+
+
 def res_mean(df: pl.DataFrame | pl.LazyFrame,
              col: str,
              lower: float = 0.10,
@@ -228,9 +240,11 @@ march_madness_raw = pl.scan_csv(
     # March_Madness_Data.csv must be updated manually with teams at the start of MM and with results at the end of MM
     schema={'Year': pl.String,
             'Round': pl.String,
+            'W_Region': pl.String,
             'W_Seed': pl.String,
             'W_Team': pl.String,
             'W_Score': pl.String,
+            'L_Region': pl.String,
             'L_Seed': pl.String,
             'L_Team': pl.String,
             'L_Score': pl.String,
@@ -265,17 +279,7 @@ def march_madness_data(df: pl.LazyFrame = march_madness_raw) -> pl.LazyFrame:
     df = df.filter(~pl.col('Round').str.contains('(?i)opening'))
 
     # Standardize round names
-    round_col = pl.col('Round')
-    df = df.with_columns(
-        pl.when(round_col.str.contains('64')).then(pl.lit('Round of 64'))
-        .when(round_col.str.contains('32')).then(pl.lit('Round of 32'))
-        .when(round_col.str.contains(r'(?i)sixteen|16')).then(pl.lit('Sweet 16'))
-        .when(round_col.str.contains(r'(?i)eight|8')).then(pl.lit('Elite 8'))
-        .when(round_col.str.contains(r'(?i)four|4')).then(pl.lit('Final 4'))
-        .when(round_col.str.contains(r'(?i)champion')).then(pl.lit('National Championship'))
-        .otherwise(round_col)
-        .alias('Round')
-    )
+    df = df.with_columns(round_regex('Round').alias('Round'))
 
     game_cols = ['Year', 'Round', 'OT']  # not team specific cols
 
@@ -319,7 +323,7 @@ class MarchMadnessData:
             self.data
             .join(stats.rename(lambda x: f'Self_{x}' if x != 'Year' else x), on=['Self_Team', 'Year'], how='inner')
             .join(stats.rename(lambda x: f'Opp_{x}' if x != 'Year' else x), on=['Opp_Team', 'Year'], how='inner')
-            .drop('Self_Team', 'Opp_Team', 'Opp_Score', 'OT')  # Drop team names and year now that we have the stats joined
+            .drop('Self_Team', 'Opp_Team', 'Opp_Score', 'OT', 'Self_Region', 'Opp_Region')
             .rename({'Self_Score': 'Target_Score'})
         )
 

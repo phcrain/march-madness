@@ -7,8 +7,9 @@ from math import floor
 from io import BytesIO
 from matplotlib.ticker import PercentFormatter
 from src.march_madness_data import march_madness_data, round_dict
-from src.todays_scores import predict_next_games
+from src.todays_scores import predict_next_games, get_next_games, predict_bracket
 import time
+from datetime import date
 
 df = (
     march_madness_data()
@@ -18,6 +19,7 @@ df = (
     .collect()
 )
 n = df.shape[0]
+year = date.today().year - 1
 
 
 def format_rounds(selected_rounds):
@@ -192,6 +194,12 @@ app_ui = ui.page_navbar(
         'Upcoming Games',
         ui.h3('Live Predictions'),
         ui.output_ui('today_games_ui')
+    ),
+
+    # Bracket with predictions
+    ui.nav_panel(
+        'Bracket',
+        ui.output_ui('bracket_ui')
     )
 )
 
@@ -247,10 +255,9 @@ def server(input, output, session):
 
     def generate_heatmap(fontsize=None, **kwargs):
         df_heatmap = heatmap_df(df_react.get())
-        print(input.annot_digits())
         if input.annot():
             digits = input.annot_digits()
-            annot = np.vectorize(lambda x: f"{x * 100:.{digits}f}")(df_heatmap)
+            annot = np.vectorize(lambda x: f'{x * 100:.{digits}f}')(df_heatmap)
         else:
             annot = False
         annot_kws = {'size': fontsize} if fontsize else {}  # Adjust font size
@@ -262,10 +269,12 @@ def server(input, output, session):
                                            clip_on=False))  # allows for highlighting outside axes dimensions
         return fig
 
+
     @render.plot
     def heatmap_plot():
         fig = generate_heatmap()
         return fig
+
 
     @reactive.effect
     @reactive.event(input.heatmap_plot_click)
@@ -323,12 +332,12 @@ def server(input, output, session):
 
     @reactive.poll(lambda: int(time.time() // 300), 300)
     def today_games():
-        return predict_next_games()
+        return get_next_games()
 
     @output
     @render.ui
     def today_games_ui():
-        games = today_games()
+        games = predict_next_games(today_games())
 
         if games is None:
             return ui.p('No games this week.')
@@ -379,6 +388,105 @@ def server(input, output, session):
                 )
 
         return ui.TagList(ui_blocks)
+
+    @render.ui
+    def bracket_ui():
+        df_bracket = predict_bracket(year)
+
+        rounds = ['Round of 64', 'Round of 32', 'Sweet 16', 'Elite 8', 'Final 4', 'National Championship']
+
+        round_blocks = []
+
+        if df_bracket is not None:
+            for rnd in rounds:
+                games = df_bracket.filter(pl.col('Round') == rnd)
+
+                game_divs = []
+
+                for row in games.iter_rows(named=True):
+
+                    def team_row(team_col, seed_col, score_col, pred_col):
+                        team = row[team_col]
+                        seed = row[seed_col]
+                        score = row[score_col]
+                        pred_score = row[pred_col]
+
+                        pred_winner = row["Pred_Winner"]
+                        actual_winner = row["winner"]
+                        game_played = row["game_played"]
+                        pred_correct = row["Prediction_Correct"]
+
+                        classes = []
+                        show_strike = False
+
+                        # --------------------------------------------------
+                        # determine who should be bolded
+                        # --------------------------------------------------
+                        if game_played and actual_winner:
+                            true_winner = actual_winner
+                        else:
+                            true_winner = pred_winner
+
+                        if team == true_winner:
+                            classes.append("winner-bold")
+
+                        # --------------------------------------------------
+                        # prediction coloring (ONLY if played)
+                        # --------------------------------------------------
+                        if game_played and team == pred_winner:
+                            if pred_correct is True:
+                                classes.append("correct")
+                            elif pred_correct is False:
+                                classes.append("incorrect")
+
+                        # --------------------------------------------------
+                        # FUTURE ROUND FIX
+                        # gray + strike predicted teams that lost earlier
+                        # --------------------------------------------------
+                        if (
+                                not game_played
+                                and actual_winner is not None
+                                and team == pred_winner
+                                and pred_correct is False
+                        ):
+                            show_strike = True
+                            classes.append("eliminated")
+
+                        class_str = " ".join(classes)
+
+                        # strike wrapper
+                        team_label = ui.tags.s(team) if show_strike else team
+
+                        return ui.div(
+                            {"class": f"team {class_str}"},
+                            ui.div(f"{seed} {team_label}"),
+                            ui.div(
+                                f"Score: {score}" if score is not None else "",
+                                f" | Pred: {pred_score}" if pred_score is not None else "",
+                            ),
+                        )
+
+                    game_divs.append(
+                        ui.div(
+                            {"class": "game-wrapper"},
+                            ui.div(
+                                {"class": "game"},
+                                team_row("A_Team", "A_Seed", "A_Score", "A_Pred_Score"),
+                                team_row("B_Team", "B_Seed", "B_Score", "B_Pred_Score"),
+                            ),
+                            ui.div({"class": "connector"})
+                        )
+                    )
+
+                round_blocks.append(
+                    ui.div(
+                        {'class': 'round'},
+                        ui.h4(rnd),
+                        *game_divs
+                    )
+                )
+
+        return ui.div({'class': 'bracket-container'}, *round_blocks)
 
 
 app = App(app_ui, server)
