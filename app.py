@@ -7,8 +7,9 @@ from math import floor
 from io import BytesIO
 from matplotlib.ticker import PercentFormatter
 from src.march_madness_data import march_madness_data, round_dict
-from src.todays_scores import predict_next_games
+from src.todays_scores import predict_next_games, get_next_games, predict_bracket
 import time
+from datetime import date
 
 df = (
     march_madness_data()
@@ -18,6 +19,72 @@ df = (
     .collect()
 )
 n = df.shape[0]
+year = date.today().year - 1
+
+ROUND_NAMES = ['Round of 64', 'Round of 32', 'Sweet 16', 'Elite 8', 'Final 4', 'Championship']
+
+# Initial bracket round
+current_bracket_round = reactive.Value(0)
+
+def team_row(row, team_prefix: str):
+    """Render team-row UI for bracket display"""
+    team = row[f'{team_prefix}_Team']
+    seed = row[f'{team_prefix}_Seed']
+    score = row[f'{team_prefix}_Score']
+    pred_score = row[f'{team_prefix}_Pred_Score']
+
+    pred_winner = row['Pred_Winner']
+    pred_loser = row['Pred_Loser']
+    actual_winner = row['winner']
+    actual_loser = row['loser']
+    game_played = row['game_played']
+    pred_correct = row['Prediction_Correct']
+
+    classes = []
+    strike = False
+
+    # determine "winner"
+    if game_played and actual_winner:
+        true_winner = actual_winner
+    else:
+        true_winner = pred_winner
+
+    if team == true_winner:
+        classes.append('winner-bold')
+
+    if game_played and actual_loser:
+        true_loser = actual_loser
+    else:
+        true_loser = pred_loser
+
+    # add classes for shading prediction accuracy
+    if game_played and team == pred_winner:
+        if pred_correct is True:
+            classes.append('correct')
+        elif pred_correct is False:
+            classes.append('incorrect')
+
+    # future elimination detection
+    if (
+            actual_winner is not None
+            and team != true_winner
+            and team != true_loser
+    ):
+        classes.append('eliminated')
+
+    class_str = ' '.join(classes)
+
+    return ui.div(
+        {'class': f'team {class_str}'},
+        ui.div(f'{seed} {team}', class_='team-name'),
+        ui.div(
+            [
+                f'Score: {score}  | ' if score is not None else '',
+                f'Pred: {pred_score}' if pred_score is not None else ''
+            ],
+            class_='team-score',
+        ),
+    )
 
 
 def format_rounds(selected_rounds):
@@ -192,6 +259,13 @@ app_ui = ui.page_navbar(
         'Upcoming Games',
         ui.h3('Live Predictions'),
         ui.output_ui('today_games_ui')
+    ),
+
+    # Bracket with predictions
+    ui.nav_panel(
+        'Predicted Bracket',
+        ui.output_ui('bracket_ui'),
+        ui.output_ui('bracket_position')
     )
 )
 
@@ -247,10 +321,9 @@ def server(input, output, session):
 
     def generate_heatmap(fontsize=None, **kwargs):
         df_heatmap = heatmap_df(df_react.get())
-        print(input.annot_digits())
         if input.annot():
             digits = input.annot_digits()
-            annot = np.vectorize(lambda x: f"{x * 100:.{digits}f}")(df_heatmap)
+            annot = np.vectorize(lambda x: f'{x * 100:.{digits}f}')(df_heatmap)
         else:
             annot = False
         annot_kws = {'size': fontsize} if fontsize else {}  # Adjust font size
@@ -262,10 +335,12 @@ def server(input, output, session):
                                            clip_on=False))  # allows for highlighting outside axes dimensions
         return fig
 
+
     @render.plot
     def heatmap_plot():
         fig = generate_heatmap()
         return fig
+
 
     @reactive.effect
     @reactive.event(input.heatmap_plot_click)
@@ -323,12 +398,12 @@ def server(input, output, session):
 
     @reactive.poll(lambda: int(time.time() // 300), 300)
     def today_games():
-        return predict_next_games()
+        return get_next_games()
 
     @output
     @render.ui
     def today_games_ui():
-        games = today_games()
+        games = predict_next_games(today_games())
 
         if games is None:
             return ui.p('No games this week.')
@@ -379,6 +454,100 @@ def server(input, output, session):
                 )
 
         return ui.TagList(ui_blocks)
+
+    @render.ui
+    def bracket_ui():
+        df_bracket = predict_bracket(year)
+
+        rounds = [
+            'Round of 64',
+            'Round of 32',
+            'Sweet 16',
+            'Elite 8',
+            'Final 4',
+            'National Championship',
+        ]
+
+        if df_bracket is None:
+            return ui.div('No bracket data')
+
+        # Build rounds divs
+        round_pages = []
+        for rnd in rounds:
+            games = (
+                df_bracket
+                .filter(pl.col('Round') == rnd)
+                .sort('key')
+            )
+
+            # Build games divs
+            game_cards = []
+            for row in games.iter_rows(named=True):
+                print('Region', type(row['A_Region']))
+                if rnd in ['Round of 64', 'Round of 32', 'Sweet 16', 'Elite 8']:
+                    region = (row['A_Region'] + 1) % 2 + 1
+                else:
+                    region = 1
+                game_cards.append(
+                    ui.div(
+                        {'class': f'game-card region-{region}'},
+                        team_row(row, 'A'),
+                        team_row(row, 'B'),
+                    )
+                )
+
+            round_pages.append(
+                ui.div(
+                    {'class': 'round-page'},
+                    *game_cards
+                )
+            )
+
+        return ui.div(
+            {'class': 'bracket-wrapper'},
+            ui.div(
+                {'class': 'nav-buttons'},
+                ui.input_action_button(id='prev_round', label='←', class_='nav-left'),
+                ui.div(
+                    {'class': 'round-header'},
+                    ui.output_text('round_header'),
+                ),
+                ui.input_action_button(id='next_round', label='→', class_='nav-right'),
+            ),
+            ui.div({'class': 'bracket-carousel'}, *round_pages),
+        )
+
+
+    @reactive.Effect
+    @reactive.event(input.prev_round)
+    def _():
+        i = max(0, current_bracket_round.get() - 1)
+        current_bracket_round.set(i)
+
+    @reactive.Effect
+    @reactive.event(input.next_round)
+    def _():
+        max_rounds = len(ROUND_NAMES)
+        i = min(max_rounds - 1, current_bracket_round.get() + 1)
+        current_bracket_round.set(i)
+
+    @output
+    @render.ui
+    def bracket_position():
+        idx = current_bracket_round.get()
+        return ui.tags.style(
+            f"""
+            .bracket-carousel {{
+                transform: translateX(-{idx * 100}%);
+                transition: transform 0.3s ease;
+            }}
+            """
+        )
+
+    @output
+    @render.text
+    def round_header():
+        return ROUND_NAMES[current_bracket_round.get()]
 
 
 app = App(app_ui, server)
