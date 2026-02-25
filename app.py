@@ -19,7 +19,7 @@ df = (
     .collect()
 )
 n = df.shape[0]
-year = date.today().year - 1
+year = date.today().year - 2
 
 ROUND_NAMES = ['Round of 64', 'Round of 32', 'Sweet 16', 'Elite 8', 'Final 4', 'Championship']
 
@@ -210,7 +210,7 @@ app_ui = ui.page_navbar(
                     )
                 ),
                 ui.input_switch('cbar', 'Display Colorbar', value=True),
-                ui.input_switch('enable_clicks', 'Click to Highlight', value=True),
+                ui.input_switch('enable_clicks', 'Click to Highlight', value=False),
 
                 ui.accordion(
                     ui.accordion_panel(

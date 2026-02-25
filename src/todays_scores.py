@@ -3,7 +3,7 @@ import polars as pl
 from datetime import date, datetime, timedelta
 from src.march_madness_data import MarchMadnessData, get_team_slug, round_dict, round_regex
 import joblib
-from re import sub
+
 
 # Get the pipeline
 saved_model = joblib.load('model/model.joblib')
