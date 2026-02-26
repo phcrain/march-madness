@@ -8,6 +8,7 @@ from io import BytesIO
 from matplotlib.ticker import PercentFormatter
 from src.march_madness_data import march_madness_data, round_dict
 from src.todays_scores import predict_next_games, get_next_games, predict_bracket
+from src.config import ROUND_NAMES
 import time
 from datetime import date
 
@@ -19,12 +20,7 @@ df = (
     .collect()
 )
 n = df.shape[0]
-year = date.today().year - 2
-
-ROUND_NAMES = ['Round of 64', 'Round of 32', 'Sweet 16', 'Elite 8', 'Final 4', 'Championship']
-
-# Initial bracket round
-current_bracket_round = reactive.Value(0)
+year = df.select(pl.max('Year')).item()
 
 def team_row(row, team_prefix: str):
     """Render team-row UI for bracket display"""
@@ -41,7 +37,6 @@ def team_row(row, team_prefix: str):
     pred_correct = row['Prediction_Correct']
 
     classes = []
-    strike = False
 
     # determine "winner"
     if game_played and actual_winner:
@@ -93,17 +88,10 @@ def format_rounds(selected_rounds):
     if selected_rounds is None:
         return ''
 
-    all_rounds = ['Round of 64',
-                  'Round of 32',
-                  'Sweet 16',
-                  'Elite 8',
-                  'Final 4',
-                  'National Championship']
-
     # Sort selected rounds
-    selected_rounds = sorted(selected_rounds, key=lambda x: all_rounds.index(x))
+    selected_rounds = sorted(selected_rounds, key=lambda x: ROUND_NAMES.index(x))
 
-    if selected_rounds == all_rounds:
+    if selected_rounds == ROUND_NAMES:
         return ''
 
     formatted_rounds = []
@@ -113,7 +101,7 @@ def format_rounds(selected_rounds):
         prev_round = selected_rounds[i - 1]
         current_round = selected_rounds[i]
 
-        if all_rounds.index(current_round) == all_rounds.index(prev_round) + 1:
+        if ROUND_NAMES.index(current_round) == ROUND_NAMES.index(prev_round) + 1:
             temp_range.append(current_round)
         else:
             if len(temp_range) >= 3:
@@ -218,14 +206,8 @@ app_ui = ui.page_navbar(
                         ui.input_checkbox_group(
                             id='rounds',
                             label='Rounds:',
-                            choices=[
-                                'Round of 64','Round of 32','Sweet 16',
-                                'Elite 8','Final 4','National Championship'
-                            ],
-                            selected=[
-                                'Round of 64','Round of 32','Sweet 16',
-                                'Elite 8','Final 4','National Championship'
-                            ]
+                            choices=ROUND_NAMES,
+                            selected=ROUND_NAMES
                         ),
                         ui.output_ui('years_ui'),
                         value='filters'
@@ -408,7 +390,8 @@ def server(input, output, session):
         if games is None:
             return ui.p('No games this week.')
 
-        days = games.partition_by('Date', as_dict=True)
+
+        days = games.collect().partition_by('Date', as_dict=True)
 
         ui_blocks = []
 
@@ -455,25 +438,19 @@ def server(input, output, session):
 
         return ui.TagList(ui_blocks)
 
+    # Initial bracket round
+    current_bracket_round = reactive.Value(0)
+
     @render.ui
     def bracket_ui():
         df_bracket = predict_bracket(year)
-
-        rounds = [
-            'Round of 64',
-            'Round of 32',
-            'Sweet 16',
-            'Elite 8',
-            'Final 4',
-            'National Championship',
-        ]
 
         if df_bracket is None:
             return ui.div('No bracket data')
 
         # Build rounds divs
         round_pages = []
-        for rnd in rounds:
+        for rnd in ROUND_NAMES:
             games = (
                 df_bracket
                 .filter(pl.col('Round') == rnd)
@@ -484,7 +461,7 @@ def server(input, output, session):
             game_cards = []
             for row in games.iter_rows(named=True):
                 print('Region', type(row['A_Region']))
-                if rnd in ['Round of 64', 'Round of 32', 'Sweet 16', 'Elite 8']:
+                if rnd in ROUND_NAMES[0:4]:
                     region = (row['A_Region'] + 1) % 2 + 1
                 else:
                     region = 1
