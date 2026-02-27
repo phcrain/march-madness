@@ -10,7 +10,6 @@ from src.march_madness_data import march_madness_data, round_dict
 from src.todays_scores import predict_next_games, get_next_games, predict_bracket
 from src.config import ROUND_NAMES
 import time
-from datetime import date
 
 df = (
     march_madness_data()
@@ -332,9 +331,6 @@ def server(input, output, session):
         # Get click data from plot
         click_data = input.heatmap_plot_click()
 
-        # Print debugging info
-        print(f'Clicked raw: {click_data}')
-
         if click_data:
             if click_data['domain']['right'] == 1:
                 return None  # Exit if key/gradient was clicked instead of heatmap cells
@@ -454,13 +450,12 @@ def server(input, output, session):
             games = (
                 df_bracket
                 .filter(pl.col('Round') == rnd)
-                .sort('key')
+                .sort('GameID')
             )
 
             # Build games divs
             game_cards = []
             for row in games.iter_rows(named=True):
-                print('Region', type(row['A_Region']))
                 if rnd in ROUND_NAMES[0:4]:
                     region = (row['A_Region'] + 1) % 2 + 1
                 else:

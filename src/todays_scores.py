@@ -1,7 +1,8 @@
 import requests
 import polars as pl
 from datetime import date, datetime, timedelta
-from src.march_madness_data import MarchMadnessData, get_team_slug, round_dict, round_regex
+from src.march_madness_data import MarchMadnessData, get_team_slug, round_regex
+from src.config import ROUND_NAMES
 import joblib
 
 
@@ -11,7 +12,7 @@ PIPELINE = saved_model['pipeline']
 
 ESPN_URL = 'https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard'
 DEFAULT_LOGO = 'https://upload.wikimedia.org/wikipedia/commons/a/a3/Image-not-found.png'
-TODAY = date.today() - timedelta(days=340)
+TODAY = date.today()
 
 SCORE_SCHEMA = {
     'Year': pl.Utf8,
@@ -32,56 +33,6 @@ SCORE_SCHEMA = {
     'A_Team_Logo': pl.Utf8,
     'B_Team_Logo': pl.Utf8,
 }
-
-# Possible opponents by round:
-def possible_opponents(round_name: str, as_string: bool = False) -> dict:
-    """Return possible opponent seeds in a 16-team region"""
-
-    if round_name == 'Round of 64':
-        if as_string:
-            return {str(i): [str(17 - i)] for i in range(1, 17)}
-        return {i: [17 - i] for i in range(1, 17)}
-
-    bracket_order = [
-        1, 16, 8, 9, 5, 12, 4, 13,
-        6, 11, 3, 14, 7, 10, 2, 15
-    ]
-
-    rounds = {
-        'Round of 32': 4,
-        'Sweet 16': 8,
-        'Elite 8': 16,
-    }
-
-    group_size = rounds[round_name]
-
-    # map seed → position in bracket
-    pos = {seed: i for i, seed in enumerate(bracket_order)}
-
-    result = {}
-
-    for seed in range(1, 9):
-        p = pos[seed]
-
-        group_start = (p // group_size) * group_size
-        group = bracket_order[group_start:group_start + group_size]
-
-        half = group_size // 2
-
-        if p < group_start + half:
-            opponents = group[half:]
-        else:
-            opponents = group[:half]
-
-        if as_string:
-            opponents = [str(opp) for opp in opponents]
-            result[str(seed)] = opponents
-            result[str(17 - seed)] = opponents
-        else:
-            result[seed] = opponents
-            result[17-seed] = opponents
-
-    return dict(sorted(result.items()))
 
 
 def __query(url: str) -> dict:
@@ -166,20 +117,43 @@ def get_next_games() -> pl.DataFrame:
     return df
 
 
-def __get_seed_key(seed, po: dict):
-    possible_seeds = {str(seed)}
-    prev_len = 0
-    while prev_len < len(possible_seeds):
-        prev_len = len(possible_seeds)
-        for s in list(possible_seeds):
-            for ps in po[s]:
-                possible_seeds.add(ps)
-    return '.'.join(sorted(possible_seeds))
-
-
 def predict_bracket(year):
-
     year = str(year) if isinstance(year, int) else year  # ensure year is a string
+    
+    po_dfs = []
+    for i in range(4):
+        rnd_df = (
+            pl.LazyFrame({
+                'Round': ROUND_NAMES[i],
+                'Seed': list(range(17)),
+            })
+        )
+
+        if i == 0:
+            all_seed_expr = pl.concat_list([pl.col('Seed'), 17 - pl.col('Seed')])
+        elif i == 1:
+            min_seed = ((17 - (2 * pl.col('Seed') - 17).abs()) / 2).cast(pl.Int64)
+            all_seed_expr = pl.concat_list([min_seed, 17 - min_seed, 9 - min_seed, 8 + min_seed])
+        elif i == 2:
+            seed_half_1 = [1, 4, 5, 8, 9, 12, 13, 16]
+            seed_half_2 = [2, 3, 6, 7, 10, 11, 14, 15]
+            all_seed_expr = (
+                pl.when(pl.col('Seed').is_in(seed_half_1))
+                .then(pl.lit(seed_half_1))
+                .otherwise(pl.lit(seed_half_2))
+            )
+        else:
+            all_seed_expr = pl.lit(list(range(17)))
+
+        rnd_df = rnd_df.with_columns(
+            all_seed_expr
+            .list.sort()
+            .alias('All_seeds')
+        )
+
+        po_dfs += [rnd_df]
+
+    po_df = pl.concat(po_dfs)
 
     mm = MarchMadnessData().data.filter(pl.col('Year').eq(year))
 
@@ -198,114 +172,183 @@ def predict_bracket(year):
         .cast(SCORE_SCHEMA)
     )
 
-    first4 = df.filter(pl.col('Round').eq('First Four')).collect()
-    df = df.filter(pl.col('Round').eq('Round of 64')).collect()
+    first4 = df.filter(pl.col('Round').eq('First Four'))
+    df = df.filter(pl.col('Round').eq('Round of 64'))
 
-    if df.height == 0:
+    if df.select(pl.len()).collect().item() == 0:
         return None
 
     dfs = []
 
-    if first4.height > 0:
-
-        pred = (
-            predict_next_games(first4)  # predict scores
-            .with_columns(
+    if (
+            first4.select(pl.len()).collect().item() > 0  # there are first 4 games in the df
+            and df.select('W_Score').drop_nulls().select(pl.len()).collect().item() < 32  # R64 is not completed yet
+    ):
+        pred = predict_next_games(first4)  # predict scores
+        if pred is not None:
+            pred = pred.with_columns(
                 pl.when(pl.col('A_Pred_Score').gt(pl.col('B_Pred_Score')))
                 .then(True)
                 .otherwise(False)
                 .alias('A_Team_Win')
             )
+
+        round_po = po_df.filter(pl.col('Round').eq('Round of 64')).drop('Round')
+
+        pred = (
+            pred
+            .with_columns(
+                pl.when(pl.col('A_Team_Win'))
+                .then(
+                    pl.struct([
+                        pl.col('A_Region').alias('f4_Region'),
+                        pl.col('A_Seed').alias('f4_Seed'),
+                        pl.col('A_Team').alias('f4_Team')
+                    ])
+                )
+                .otherwise(
+                    pl.struct([
+                        pl.col('B_Region').alias('f4_Region'),
+                        pl.col('B_Seed').alias('f4_Seed'),
+                        pl.col('B_Team').alias('f4_Team')
+                    ])
+                )
+                .alias('f4')
+            )
+            .join(round_po, left_on='A_Seed', right_on='Seed')
+            .explode('All_seeds')
+            .filter(pl.col('A_Seed').ne(pl.col('All_seeds')))
+            # A_Region == B_Region and A_Seed == B_Seed, always
+            .with_columns(pl.concat_str(pl.col('A_Region'), pl.lit('_'), pl.col('All_seeds')).alias('shared_key'))
+            .select('shared_key', 'f4')
+            .unnest('f4')
         )
 
-        dfs += [pred.lazy()]
-
-        for row in pred.iter_rows(named=True):
-            po = possible_opponents('Round of 64', True)
-
-            winner = row['A_Team'] if row['A_Team_Win'] else row['B_Team']
-            df = df.with_columns(
-                pl.when(
-                    pl.col('L_Region').eq(str(row['A_Region'])) &
-                    pl.col('W_Seed').is_in(po.get(row['A_Seed']))
-                )
-                .then(pl.lit(winner))
-                .otherwise(pl.col('L_Team'))
-                .alias('L_Team'),
-                pl.when(
-                    pl.col('W_Region').eq(str(row['A_Region'])) &
-                    pl.col('L_Seed').is_in(po.get(row['A_Seed']))
-                )
-                .then(pl.lit(winner))
-                .otherwise(pl.col('W_Team'))
-                .alias('W_Team')
+        # Join predicted first 4 winners to the bracket
+        df = (
+            df
+            .with_columns(
+                pl.concat_str(pl.col('W_Region'), pl.lit('_'), pl.col('W_Seed')).alias('key_L'),
+                pl.concat_str(pl.col('L_Region'), pl.lit('_'), pl.col('L_Seed')).alias('key_W')
             )
+            .join(pred, left_on='key_L', right_on='shared_key', how='left')
+            .join(pred, left_on='key_W', right_on='shared_key', suffix='_W', how='left')
+            .with_columns(
+                pl.coalesce('f4_Region', 'L_Region').alias('L_Region'),
+                pl.coalesce('f4_Seed', 'L_Seed').alias('L_Seed'),
+                pl.coalesce('f4_Team', 'L_Team').alias('L_Team'),
+                pl.coalesce('f4_Region_W', 'W_Region').alias('W_Region'),
+                pl.coalesce('f4_Seed_W', 'W_Seed').alias('W_Seed'),
+                pl.coalesce('f4_Team_W', 'W_Team').alias('W_Team')
+            )
+            .drop('^f4_.+$', '^key_.$')
+        )
+    # END if first4 statement
 
-    rounds = ['Round of 64', 'Round of 32', 'Sweet 16', 'Elite 8', 'Final 4', 'National Championship']
+    all_cols = df.collect_schema().keys()
+    generic_cols = [col.replace('W_', '') for col in all_cols if 'W_' in col]
+    w_cols = ['A_' + col for col in generic_cols]
+    l_cols = ['B_' + col for col in generic_cols]
 
-    all_cols = df.columns
-    w_cols = [col for col in all_cols if 'W_' in col]
-    l_cols = [col for col in all_cols if 'L_' in col]
-    generic_cols = [x.replace('W_', '') for x in w_cols]
+    bracket_order_dict = {
+        '1.4.5.8.9.12.13.16': '1',
+        '2.3.6.7.10.11.14.15': '2',
+        '1.8.9.16': '1',
+        '4.5.12.13': '2',
+        '3.6.11.14': '3',
+        '2.7.10.15': '4',
+        '1.16': '1',
+        '8.9': '2',
+        '5.12': '3',
+        '4.13': '4',
+        '6.11': '5',
+        '3.14': '6',
+        '7.10': '7',
+        '2.15': '8',
+    }
+
+    def __key_expr(prefix: str = '', round_col: str = 'Round'):
+        return (
+            pl.when(pl.col(round_col) == ROUND_NAMES[-1])
+            .then(pl.lit('5'))
+            .when(pl.col(round_col) == ROUND_NAMES[-2])
+            .then(pl.when(pl.col(f'{prefix}Region').lt(3)).then(pl.lit('412')).otherwise(pl.lit('434')))
+            .when(pl.col(round_col) == ROUND_NAMES[-3])
+            .then(pl.concat_str(pl.lit('3'), pl.col(f'{prefix}Region')))
+            .when(pl.col(round_col).is_in(ROUND_NAMES[-6:-3]))
+            .then(
+                pl.concat_str([
+                    pl.col(round_col).replace({ROUND_NAMES[-6]: '0', ROUND_NAMES[-5]: '1', ROUND_NAMES[-4]: '2'}),
+                    pl.col(f'{prefix}Region'),
+                    pl.lit('_'),
+                    (
+                        pl.col('All_seeds')
+                        .list.eval(pl.element().cast(pl.String))
+                        .list.join('.')
+                        .replace_strict(bracket_order_dict, default='1')
+                    )
+                ])
+            )
+        )
+
     df_next = df
-    for i in range(len(rounds)):
+    for i in range(len(ROUND_NAMES)):
+        next_round = ROUND_NAMES[min(i+1, 5)]
+        # Predict this round's scores
         pred = (
-            predict_next_games(df_next)  # predict scores
-            .with_columns(
-                pl.when(pl.col('A_Pred_Score').gt(pl.col('B_Pred_Score')))
-                .then(True)
-                .otherwise(False)
-                .alias('A_Team_Win')
-            )
+                   predict_next_games(df_next.collect())
+                   .with_columns(pl.lit(next_round).alias('Next_Round'))
+                   .join(
+                       po_df.select('Round', 'Seed', 'All_seeds'),
+                       left_on=['Next_Round', 'A_Seed'], right_on=['Round', 'Seed'], how='left'
+                   )
+                   .with_columns(
+                       pl.when(pl.col('A_Pred_Score').gt(pl.col('B_Pred_Score')))
+                       .then(True)
+                       .otherwise(False)
+                       .alias('A_Team_Win'),
+                       __key_expr('A_', 'Next_Round').alias('shared_key'),
+                       # __key_expr('B_', 'Next_Round').alias('B_key'),
+                   )
+                   .drop('Next_Round', 'All_seeds')
         )
 
-        dfs += [pred.lazy()]
+        dfs += [pred]
 
-        if i < len(rounds)-1:
-            # Get possible opponents for the next round
-
-
-            if i < 3:  # Ro64 - S16
-                po = possible_opponents(rounds[i + 1], True)
-                key_expr = pl.concat_str(
-                    pl.col('Seed').map_elements(lambda x: __get_seed_key(x, po), return_dtype=pl.String),
-                    pl.lit('-'),
-                    pl.col('Region')
-                ).alias('key')
-            elif i == 3:  # E8
-                key_expr = pl.when(pl.col('Region').lt(3)).then(pl.lit('1.2')).otherwise(pl.lit('3.4')).alias('key')
-            else:  # F4
-                df_saved = df_next
-                key_expr = pl.lit('NATTY').alias('key')
-
+        if i < len(ROUND_NAMES)-1:
             next = (
-                pred
-                .drop('A_Pred_Score', 'B_Pred_Score')
-                .rename(lambda x: x.replace('A_', 'W_') if x not in ['A_Team_Logo', 'A_Team_Win'] else x)
-                .rename(lambda x: x.replace('B_', 'L_') if x != 'B_Team_Logo' else x)
+                pred.lazy()
                 .with_columns(
                     pl.when(pl.col('A_Team_Win'))
                     .then(pl.struct(w_cols).struct.rename_fields(generic_cols).alias('Winner'))
                     .otherwise(pl.struct(l_cols).struct.rename_fields(generic_cols).alias('Winner'))
                 )
-                .drop('^[WL]_.+$')
+                .drop(w_cols + l_cols + ['A_Pred_Score', 'B_Pred_Score'])
                 .unnest('Winner')
-                .with_columns(pl.lit(rounds[i+1]).alias('Round'))
-                .with_columns(key_expr)
+                .with_columns(pl.lit(ROUND_NAMES[i+1]).alias('Round'))
             )
 
             df_next = (
                 next
-                .join(next.select(generic_cols + ['key']), on='key', suffix='_right')
-                .filter(pl.col('Team').ne(pl.col('Team_right')))
-                .group_by('key').agg(pl.all().sort_by(pl.col('Seed')).first())
-                .rename(lambda x: 'L_' + x.replace('_right', '') if '_right' in x else x)
-                .rename(lambda x: 'W_' + x if x in generic_cols else x)
-                .select(all_cols)
+                .join(next.select(generic_cols + ['shared_key']), on='shared_key', suffix='_L')
+                .filter(pl.col('Team').ne(pl.col('Team_L')))
+                .group_by('shared_key').agg(pl.all().sort_by(pl.col('Seed')).first())
+                .rename({
+                    'Region': 'W_Region',
+                    'Seed': 'W_Seed',
+                    'Team': 'W_Team',
+                    'Score': 'W_Score',
+                    'Region_L': 'L_Region',
+                    'Seed_L': 'L_Seed',
+                    'Team_L': 'L_Team',
+                    'Score_L': 'L_Score',
+                })
+                .select(list(all_cols))
                 .with_columns(pl.all().cast(pl.String))
             )
 
     combined_df = pl.concat(dfs)
+
     # Get all scores from completed games
     wl_scores = (
         mm
@@ -329,6 +372,7 @@ def predict_bracket(year):
         .rename({f'{pre}Team': 'Team', f'{pre}Score': 'Score'})
         for pre in ['W_', 'L_']
     ])
+
     # Join scores to predicted outcomes
     schema = combined_df.collect_schema().keys()
     combined_df = (
@@ -364,91 +408,33 @@ def predict_bracket(year):
         .with_columns(pl.col('Prediction_Correct').fill_null(False))
     )
 
-    # Set logic to determine game keys
-    key_expr_2 = (
-        pl.when(pl.col('Round').is_in(['Round of 64', 'Round of 32', 'Sweet 16']))
-        .then(
-            pl.concat_str([
-                pl.col('Round').replace({'Round of 64': '1', 'Round of 32': '1', 'Sweet 16': '2'}),
-                pl.col('W_Region'),
-                pl.lit('_'),
-                (
-                    pl.struct('W_Seed', 'Round')
-                    .map_elements(
-                        lambda x:  __get_seed_key(x['W_Seed'], possible_opponents(x['Round'], True))
-                        if x['Round'] in ['Round of 64', 'Round of 32', 'Sweet 16'] else None,
-                        return_dtype=pl.String
-                    )
-                )
-            ])
-        )
-        .when(pl.col('Round') == 'Elite 8')
-        .then(pl.concat_str(pl.lit('3'), pl.col('W_Region')))
-        .when(pl.col('Round') == 'Final 4')
-        .then(pl.when(pl.col('W_Region').lt(3)).then(pl.lit('412')).otherwise(pl.lit('434')))
-        .when(pl.col('Round') == 'National Championship')
-        .then(pl.lit('5'))
-        .alias('key')
-    )
-
+    # Determine game keys
     scores_exist = (
         wl_scores
         .with_columns(pl.col('W_Region').str.to_integer(), pl.lit(True).alias('game_played'))
-        .with_columns(key_expr_2)
-        .select('key', 'winner', 'loser', 'game_played')
-    )
-    combined_df = (
-        combined_df
-        .rename(lambda x: x.replace('A_', 'W_'))
-        .with_columns(key_expr_2)
-        .rename(lambda x: x.replace('W_', 'A_'))
-        .join(scores_exist, on='key', how='left')
-        #.drop('key')
-        .with_columns(pl.col('game_played').fill_null(False))
+        .join(
+            po_df.with_columns(pl.col('Seed').cast(pl.String)).select('Round', 'Seed', 'All_seeds'),
+            left_on=['Round', 'W_Seed'], right_on=['Round', 'Seed'], how='left'
+        )
+        .with_columns(__key_expr('W_').alias('GameID'))
+        .select('GameID', 'winner', 'loser', 'game_played')
     )
 
-    BRACKET_SLOTS = {
-        'Round of 64': {
-            '1.16': '1',
-            '8.9': '2',
-            '12.5': '3',
-            '13.4': '4',
-            '11.6': '5',
-            '14.3': '6',
-            '10.7': '7',
-            '15.2': '8',
-        },
-        'Round of 32': {
-            '1.16.8.9': '1',
-            '12.13.4.5': '2',
-            '11.14.3.6': '3',
-            '10.15.2.7': '4',
-        },
-        'Sweet 16': {
-            '1.12.13.16.4.5.8.9': '1',
-            '10.11.14.15.2.3.6.7': '2',
-        }
-    }
-
+    # Join the winner/loser/game played fields and sort the df by GameID
     combined_df_sorted = (
         combined_df
-        .with_columns(pl.col('key').str.replace(r'^.+_', '').alias('opp_suff'))
-        .with_columns(
-            pl.struct('opp_suff', 'Round').map_elements(
-                lambda x: BRACKET_SLOTS.get(x['Round'], {}).get(x['opp_suff'], '')
-                if x['Round'] in ['Round of 64', 'Round of 32', 'Sweet 16'] else '1',
-                pl.String
-            ).alias('opp_suff')
-        )
-        .with_columns(pl.col('key').str.replace(r'_.+', pl.col('opp_suff')))
-        .drop('opp_suff')
-        .sort('key')
+        .join(po_df.select('Round', 'Seed', 'All_seeds'),
+              left_on=['Round', 'A_Seed'], right_on=['Round', 'Seed'], how='left')
+        .with_columns(__key_expr('A_').alias('GameID')).drop('All_seeds')
+        .join(scores_exist, on='GameID', how='left')
+        .with_columns(pl.col('game_played').fill_null(False))
+        .sort('GameID')
     )
 
     return combined_df_sorted.collect()
 
 
-def predict_next_games(df: pl.DataFrame) -> pl.DataFrame | None:
+def predict_next_games(df: pl.DataFrame | pl.LazyFrame) -> pl.DataFrame | None:
     """
     Get upcoming game data from ESPN and run data through the score predictor model.
 
@@ -462,42 +448,46 @@ def predict_next_games(df: pl.DataFrame) -> pl.DataFrame | None:
     -------
     pl.DataFrame
     """
-    if df.height == 0:
+    if isinstance(df, pl.DataFrame):
+        if df.height == 0:
+            return None
+        df = df.lazy()
+    elif df.select(pl.len()).collect().item() == 0:
         return None
-    else:
-        X = MarchMadnessData()
-        X.data = df.lazy()
-        X.load()
-        X.transform()
-        data = X.collect().drop('Target_Score')
-        predictions = PIPELINE.predict(data)
-        pred_df = (
-            pl.DataFrame({'ID': data['GameID'], 'Pred_Score': predictions})
-            .with_columns(pl.col('Pred_Score').round(1).cast(pl.String))
+
+    X = MarchMadnessData()
+    X.data = df
+    X.load()
+    X.transform()
+    data = X.collect().drop('Target_Score')
+    predictions = PIPELINE.predict(data)
+    pred_df = (
+        pl.LazyFrame({'ID': data['GameID'], 'Pred_Score': predictions})
+        .with_columns(pl.col('Pred_Score').round(1).cast(pl.String))
+    )
+    return (
+        df
+        .with_columns(
+            pl.concat_str([
+                pl.col('GameID'),
+                pl.lit('_'),
+                pl.col(f'{col}_Team').map_elements(get_team_slug, return_dtype=pl.Utf8)
+                ]).alias(f'{col}_ID')
+            for col in ['W', 'L']
         )
-        return (
-            df
-            .with_columns(
-                pl.concat_str([
-                    pl.col('GameID'),
-                    pl.lit('_'),
-                    pl.col(f'{col}_Team').map_elements(get_team_slug, return_dtype=pl.Utf8)
-                    ]).alias(f'{col}_ID')
-                for col in ['W', 'L']
-            )
-            .with_columns(pl.col('Date').str.to_date('%Y-%m-%d'))
-            .join(pred_df.rename(lambda x: 'W_' + x), on='W_ID')
-            .join(pred_df.rename(lambda x: 'L_' + x), on='L_ID')
-            .drop('W_ID', 'L_ID')
-            .rename(lambda x: x.replace('W_', 'A_').replace('L_', 'B_'))
-            .sort('Date')
-            .cast({
-                'Year': pl.UInt16,
-                'A_Seed': pl.UInt8,
-                'A_Region': pl.UInt8,
-                'A_Score': pl.UInt8,
-                'B_Seed': pl.UInt8,
-                'B_Region': pl.UInt8,
-                'B_Score': pl.UInt8,
-            })
-        )
+        .with_columns(pl.col('Date').str.to_date('%Y-%m-%d'))
+        .join(pred_df.rename(lambda x: 'W_' + x), on='W_ID')
+        .join(pred_df.rename(lambda x: 'L_' + x), on='L_ID')
+        .drop('W_ID', 'L_ID')
+        .rename(lambda x: x.replace('W_', 'A_').replace('L_', 'B_'))
+        .sort('Date')
+        .cast({
+            'Year': pl.UInt16,
+            'A_Seed': pl.UInt8,
+            'A_Region': pl.UInt8,
+            'A_Score': pl.UInt8,
+            'B_Seed': pl.UInt8,
+            'B_Region': pl.UInt8,
+            'B_Score': pl.UInt8,
+        })
+    )
