@@ -178,3 +178,13 @@
   font-size: 18px;
 }
 
+.year-header {
+  background: #f0f4ff;
+  font-size: 22px;
+  font-weight: 700;
+  text-align: center;
+  padding: 8px 0;
+  margin-bottom: 8px;
+}
+
+

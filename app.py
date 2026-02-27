@@ -477,6 +477,7 @@ def server(input, output, session):
 
         return ui.div(
             {'class': 'bracket-wrapper'},
+            ui.div({"class": "year-header"}, f"{year}"),
             ui.div(
                 {'class': 'nav-buttons'},
                 ui.input_action_button(id='prev_round', label='←', class_='nav-left'),
