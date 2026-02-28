@@ -23,9 +23,15 @@ year = df.select(pl.max('Year')).item()
 
 def team_row(row, team_prefix: str):
     """Render team-row UI for bracket display"""
+    eliminated = False
+
     team = row[f'{team_prefix}_Team']
+    actual_team = row[f'{team_prefix}_Actual_Team']
     seed = row[f'{team_prefix}_Seed']
+    actual_seed = row[f'{team_prefix}_Actual_Seed']
     score = row[f'{team_prefix}_Score']
+    actual_score = row[f'{team_prefix}_Actual_Score']
+
     pred_score = row[f'{team_prefix}_Pred_Score']
 
     pred_winner = row['Pred_Winner']
@@ -36,6 +42,8 @@ def team_row(row, team_prefix: str):
     pred_correct = row['Prediction_Correct']
 
     classes = []
+    elim_incorrect = ''
+    elim_classes = []
 
     # determine "winner"
     if game_played and actual_winner:
@@ -43,7 +51,7 @@ def team_row(row, team_prefix: str):
     else:
         true_winner = pred_winner
 
-    if team == true_winner:
+    if team == true_winner or actual_team == true_winner:
         classes.append('winner-bold')
 
     if game_played and actual_loser:
@@ -57,6 +65,8 @@ def team_row(row, team_prefix: str):
             classes.append('correct')
         elif pred_correct is False:
             classes.append('incorrect')
+            elim_classes.append('incorrect')
+            elim_incorrect = 'team incorrect'
 
     # future elimination detection
     if (
@@ -64,9 +74,28 @@ def team_row(row, team_prefix: str):
             and team != true_winner
             and team != true_loser
     ):
+        eliminated = True
+        elim_classes.append('strike')
+        elim_classes.append('eliminated')
         classes.append('eliminated')
 
     class_str = ' '.join(classes)
+
+    if eliminated:
+        elim_class_str = ' '.join(elim_classes)
+        return ui.div(
+            {'class': elim_incorrect},
+            ui.div(
+                {'class': f'team {elim_class_str}'},
+                ui.div(f'{seed} {team}', class_='team-name'),
+                ui.div(f'Pred: {pred_score}' if pred_score is not None else '', class_='team-score'),
+            ),
+            ui.div(
+                {'class': f'team {class_str}'},
+                ui.div(f'{actual_seed} {actual_team}', class_='team-name'),
+                ui.div(f'Score: {actual_score}' if actual_score is not None else '', class_='team-score'),
+            ),
+        )
 
     return ui.div(
         {'class': f'team {class_str}'},

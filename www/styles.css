@@ -145,6 +145,9 @@
 
 .eliminated {
   color: #8c0303;
+}
+
+.strike {
   text-decoration: line-through;
 }
 
