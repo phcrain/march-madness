@@ -56,7 +56,9 @@ def team_row(row, team_prefix: str):
 
     class_str = ' '.join(classes)
 
-    pred_class = 'pred-score strike' if elim else 'pred-score'
+    pred_class = 'pred-score'
+    if elim or pred_team != display_team:
+        pred_class += ' strike'
 
     return ui.div(
         {'class': 'teams-row'},
