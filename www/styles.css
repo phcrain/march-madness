@@ -8,12 +8,28 @@
 }
 
 .game-card {
-  border: 1px solid #ddd;
-  border-radius: 8px;
-  padding: 12px;
-  margin-bottom: 12px;
-  background: white;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.15);
+  border: 1px solid #e5e5e5;
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-bottom: 14px;
+  background: #ffffff;
+  box-shadow: 0 3px 8px rgba(0,0,0,0.08);
+  max-width: 520px;
+}
+
+.game-card-header-long {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 14px;
+  color: #6c757d;
+  margin-bottom: 10px;
+}
+
+.game-card-header {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
 }
 
 .game-card.region-1 {
@@ -24,6 +40,14 @@
     background: #f2f9ff;
 }
 
+.team-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  font-size: 15px;
+  color: rgb(90, 91, 92);
+}
 
 .game-title {
   font-weight: 600;
@@ -35,6 +59,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  padding: 6px 0;
 }
 
 .team-block {
@@ -47,9 +72,25 @@
   margin-bottom: 4px;
 }
 
+.team-logo-small {
+  height: 2em;
+  width: auto;
+  object-fit: contain;
+  vertical-align: middle;
+  margin-right: 0.25em;
+}
+
 .team-pred {
   font-size: 0.8rem;
   color: #666;
+}
+
+.team-score {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 60px;
+  justify-content: flex-end;
 }
 
 .winner {
@@ -82,7 +123,7 @@
 }
 
 .bracket-wrapper {
-    # overflow: hidden;
+    overflow: hidden;
     width: 100%;
 }
 
@@ -143,16 +184,46 @@
   background-color: #f8d7da;
 }
 
-.eliminated {
-  color: #8c0303;
+.strike {
   text-decoration: line-through;
+  color: #8c0303 !important;
+}
+
+.seed {
+  color: rgb(90, 91, 92);
+  font-size: 12px;
+  color: #8a8a8a;
+  width: 26px;
+  text-align: right;
+}
+
+.actual-score {
+  -webkit-box-align: center;
+  -webkit-box-flex: 0;
+  flex: none;
+  display: flex;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.pred-score {
+  font-size: 0.85rem;
+  color: #6c757d;
+}
+
+.correct-card {
+  border-left: 6px solid #198754;
+}
+
+.incorrect-card {
+  border-left: 6px solid #dc3545;
 }
 
 .round-header {
-    flex: 1;
-    text-align: center;
-    font-weight: 600;
-    font-size: 1.1rem;
+  flex: 1;
+  text-align: center;
+  font-weight: 600;
+  font-size: 1.1rem;
 }
 
 
@@ -176,6 +247,11 @@
   padding: 8px 16px;
   border-radius: 4px;
   font-size: 18px;
+}
+
+.nav-hidden {
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .year-header {

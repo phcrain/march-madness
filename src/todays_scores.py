@@ -178,6 +178,25 @@ def predict_bracket(year):
     if df.select(pl.len()).collect().item() == 0:
         return None
 
+    W_cols = ['W_Region', 'W_Seed', 'W_Team', 'W_Score']
+    L_cols = ['L_Region', 'L_Seed', 'L_Team', 'L_Score']
+
+    df = df.with_columns(
+        [
+            pl.when(pl.col('W_Seed').str.to_integer() > pl.col('L_Seed').str.to_integer())
+            .then(pl.col(L))
+            .otherwise(pl.col(W))
+            .alias(W)
+            for W, L in zip(W_cols, L_cols)
+        ] + [
+            pl.when(pl.col('W_Seed').str.to_integer() > pl.col('L_Seed').str.to_integer())
+            .then(pl.col(W))
+            .otherwise(pl.col(L))
+            .alias(L)
+            for W, L in zip(W_cols, L_cols)
+        ]
+    )
+
     dfs = []
 
     if (
@@ -353,8 +372,9 @@ def predict_bracket(year):
     wl_scores = (
         mm
         .with_columns(round_regex('Round').alias('Round'))
-        .filter(pl.col('W_Score').is_not_null() | pl.col('L_Score').is_not_null())
-        .select('Round', '^[WL]_Region$', '^[WL]_Seed$', '^[WL]_Team$', '^[WL]_Score$')
+        .filter(pl.col('W_Score').is_not_null() | pl.col('L_Score').is_not_null())  # remove unplayed games
+        .select('Round', '^[WL]_Region$', '^[WL]_Seed$', '^[WL]_Team$', '^[WL]_Score$')  # Select w/l cols
+        # Create winner and losers cols with team names
         .with_columns(
             pl.when(pl.col('W_Score').str.to_integer() > pl.col('L_Score').str.to_integer())
             .then(pl.col('W_Team'))
@@ -365,29 +385,146 @@ def predict_bracket(year):
             .otherwise(pl.col('L_Team'))
             .alias('loser')
         )
+        .with_columns(pl.lit(True).alias('game_played'))  # create indicator that game was played
+        .with_columns(pl.col(col).cast(pl.UInt8) for col in ['W_Seed', 'W_Region'])
     )
-    all_scores = pl.concat([
+
+    wl_scores_id = (
         wl_scores
-        .select('Round', f'{pre}Team', f'{pre}Score')
-        .rename({f'{pre}Team': 'Team', f'{pre}Score': 'Score'})
-        for pre in ['W_', 'L_']
-    ])
+        .join(po_df, left_on=['Round', 'W_Seed'], right_on=['Round', 'Seed'], how='left')
+        .with_columns(__key_expr('W_').alias('GameID'))
+        .drop('All_seeds', 'Round')
+    )
+
+    wl_scores_prev = (
+        wl_scores
+        .with_columns(pl.col('Round').replace_strict({ROUND_NAMES[i]: i for i in range(len(ROUND_NAMES))}, default=-1))
+        .filter(pl.col('Round').eq(pl.max('Round')))
+        .with_columns(
+            pl.col('Round').replace_strict({i: ROUND_NAMES[i+1] for i in range(len(ROUND_NAMES)-1)}, default=None),
+            pl.when(pl.col('winner').eq(pl.col('W_Team')))
+            .then(pl.col('W_Seed'))
+            .otherwise(pl.col('L_Seed'))
+            .cast(pl.UInt8)
+            .alias('Seed'),
+            pl.col('W_Region').alias('Region')
+        )
+        .filter(pl.col('Round').is_not_null())
+        .select('Round', 'Region', 'Seed', 'winner')
+    )
+
+    wl_scores_prev_id = (
+        wl_scores_prev
+        .join(po_df, on=['Round', 'Seed'], how='left')
+        .with_columns(__key_expr().alias('GameID'))
+        .drop('All_seeds', 'Round', 'Region')
+    )
+
+    wl_scores_prev_id = (
+        wl_scores_prev_id
+        .join(wl_scores_prev_id, on=['GameID'], suffix='2')
+        .filter(pl.col('winner').ne(pl.col('winner2')))
+        .group_by('GameID').agg(pl.all().first())
+    )
 
     # Join scores to predicted outcomes
-    schema = combined_df.collect_schema().keys()
     combined_df = (
         combined_df
         .drop('A_Score', 'B_Score')
-        .join(all_scores.rename({'Score': 'A_Score', 'Team': 'A_Team'}), on=['Round', 'A_Team'], how='left')
-        .join(all_scores.rename({'Score': 'B_Score', 'Team': 'B_Team'}), on=['Round', 'B_Team'], how='left')
-        .select(schema)
-    )
-
-    # Get the winning team in each round's matchups
-    w_teams = (
-        wl_scores
-        .select('Round', 'winner')
-        .with_columns(pl.lit(True).alias('Prediction_Correct'))
+        .join(po_df, left_on=['Round', 'A_Seed'], right_on=['Round', 'Seed'], how='left')
+        .with_columns(__key_expr('A_').alias('GameID')).drop('All_seeds')
+        .join(wl_scores_id, on='GameID', how='left')
+        .with_columns(pl.col('game_played').fill_null(False))  # unjoined rows are future games
+        .join(wl_scores_prev_id, on='GameID', how='left', suffix='1')  # Joins Seed and winner1, Seed2 and winner2
+        .with_columns(
+            A_Actual=pl.when(
+                pl.col('game_played') &
+                pl.col('W_Team').ne(pl.col('A_Team')) &
+                pl.col('W_Team').ne(pl.col('B_Team')) &
+                pl.col('L_Team').ne(pl.col('A_Team'))
+            ).then(pl.struct(
+                A_Actual_Seed=pl.col('W_Seed'),
+                A_Actual_Team=pl.col('W_Team'),
+                A_Actual_Score=pl.col('W_Score'))
+            ).when(
+                pl.col('game_played') &
+                pl.col('L_Team').ne(pl.col('A_Team')) &
+                pl.col('L_Team').ne(pl.col('B_Team')) &
+                pl.col('W_Team').ne(pl.col('A_Team'))
+            ).then(pl.struct(
+                A_Actual_Seed=pl.col('L_Seed'),
+                A_Actual_Team=pl.col('L_Team'),
+                A_Actual_Score=pl.col('L_Score'))
+            ).when(
+                ~pl.col('game_played') &
+                pl.col('winner1').ne(pl.col('A_Team')) &
+                pl.col('winner1').ne(pl.col('B_Team')) &
+                pl.col('winner2').ne(pl.col('A_Team'))
+            ).then(pl.struct(
+                A_Actual_Seed=pl.col('Seed'),
+                A_Actual_Team=pl.col('winner1'),
+                A_Actual_Score=pl.lit(None))
+            ).when(
+                ~pl.col('game_played') &
+                pl.col('winner2').ne(pl.col('A_Team')) &
+                pl.col('winner2').ne(pl.col('B_Team')) &
+                pl.col('winner1').ne(pl.col('A_Team'))
+            ).then(pl.struct(
+                A_Actual_Seed=pl.col('Seed2'),
+                A_Actual_Team=pl.col('winner2'),
+                A_Actual_Score=pl.lit(None))
+            ),
+            B_Actual=pl.when(
+                pl.col('game_played') &
+                pl.col('L_Team').ne(pl.col('B_Team')) &
+                pl.col('L_Team').ne(pl.col('A_Team')) &
+                pl.col('W_Team').ne(pl.col('B_Team'))
+            ).then(pl.struct(
+                B_Actual_Seed=pl.col('L_Seed'),
+                B_Actual_Team=pl.col('L_Team'),
+                B_Actual_Score=pl.col('L_Score'))
+            ).when(
+                pl.col('game_played') &
+                pl.col('W_Team').ne(pl.col('B_Team')) &
+                pl.col('W_Team').ne(pl.col('A_Team')) &
+                pl.col('L_Team').ne(pl.col('B_Team'))
+            ).then(pl.struct(
+                B_Actual_Seed=pl.col('W_Seed'),
+                B_Actual_Team=pl.col('W_Team'),
+                B_Actual_Score=pl.col('W_Score'))
+            ).when(
+                ~pl.col('game_played') &
+                pl.col('winner2').ne(pl.col('B_Team')) &
+                pl.col('winner2').ne(pl.col('A_Team')) &
+                pl.col('winner1').ne(pl.col('B_Team'))
+            ).then(pl.struct(
+                B_Actual_Seed=pl.col('Seed2'),
+                B_Actual_Team=pl.col('winner2'),
+                B_Actual_Score=pl.lit(None))
+            ).when(
+                ~pl.col('game_played') &
+                pl.col('winner1').ne(pl.col('B_Team')) &
+                pl.col('winner1').ne(pl.col('A_Team')) &
+                pl.col('winner2').ne(pl.col('B_Team'))
+            ).then(pl.struct(
+                B_Actual_Seed=pl.col('Seed'),
+                B_Actual_Team=pl.col('winner1'),
+                B_Actual_Score=pl.lit(None))
+            )
+        )
+        .unnest('A_Actual', 'B_Actual')
+        .with_columns(
+            A_Score=pl.when(pl.col('A_Team') == pl.col('W_Team'))
+            .then(pl.col('W_Score'))
+            .when(pl.col('A_Team') == pl.col('L_Team'))
+            .then(pl.col('L_Score')),
+            B_Score=pl.when(pl.col('B_Team') == pl.col('W_Team'))
+            .then(pl.col('W_Score'))
+            .when(pl.col('B_Team') == pl.col('L_Team'))
+            .then(pl.col('L_Score')),
+        )
+        .drop('^(W|L)_.+$')
+        .drop('Seed', 'Seed2', 'winner1', 'winner2')
     )
 
     # Get predicted winner vs actual winner fields
@@ -402,36 +539,45 @@ def predict_bracket(year):
             .then(pl.col('B_Team'))
             .otherwise(pl.col('A_Team'))
             .alias('Pred_Loser'),
-
         )
-        .join(w_teams, left_on=['Round', 'Pred_Winner'], right_on=['Round', 'winner'], how='left')
-        .with_columns(pl.col('Prediction_Correct').fill_null(False))
+        .with_columns(
+            pl.when(pl.col('game_played'))
+            .then(pl.col('Pred_Winner').eq_missing(pl.col('winner')))
+            .when(
+                ~pl.col('game_played')
+                & pl.col('Pred_Winner').ne(pl.coalesce(pl.col('A_Actual_Team'), pl.col('A_Team')))
+                & pl.col('Pred_Winner').ne(pl.coalesce(pl.col('B_Actual_Team'), pl.col('B_Team')))
+            )
+            .then(pl.lit(False))
+            .alias('Prediction_Correct')
+        )
     )
 
-    # Determine game keys
-    scores_exist = (
-        wl_scores
-        .with_columns(pl.col('W_Region').str.to_integer(), pl.lit(True).alias('game_played'))
-        .join(
-            po_df.with_columns(pl.col('Seed').cast(pl.String)).select('Round', 'Seed', 'All_seeds'),
-            left_on=['Round', 'W_Seed'], right_on=['Round', 'Seed'], how='left'
-        )
-        .with_columns(__key_expr('W_').alias('GameID'))
-        .select('GameID', 'winner', 'loser', 'game_played')
-    )
+    logo_df = pl.scan_parquet('data/espn_logos.parquet')
 
-    # Join the winner/loser/game played fields and sort the df by GameID
-    combined_df_sorted = (
+    combined_df_logos = (
         combined_df
-        .join(po_df.select('Round', 'Seed', 'All_seeds'),
-              left_on=['Round', 'A_Seed'], right_on=['Round', 'Seed'], how='left')
-        .with_columns(__key_expr('A_').alias('GameID')).drop('All_seeds')
-        .join(scores_exist, on='GameID', how='left')
-        .with_columns(pl.col('game_played').fill_null(False))
-        .sort('GameID')
+        .with_columns(
+            pl.coalesce(pl.col(f'{pre}_Actual_Team'), pl.col(f'{pre}_Team'))
+            .map_elements(get_team_slug, pl.String)
+            .alias(f'{pre}_slug') for pre in ['A', 'B']
+        )
+        .join(logo_df, left_on='A_slug', right_on='slug')
+        .join(logo_df, left_on='B_slug', right_on='slug', suffix='_b')
+        .drop('A_Team_Logo', 'B_Team_Logo')
+        .rename({'logo_url': 'A_Team_Logo', 'logo_url_b': 'B_Team_Logo'})
     )
 
-    return combined_df_sorted.collect()
+    losers = combined_df_logos.select(pl.col('loser').drop_nulls()).with_columns(pl.lit(True).alias('Elim'))
+
+    final_df = (
+        combined_df_logos
+        .join(losers, left_on='A_Team', right_on='loser', how='left').rename({'Elim': 'A_Elim'})
+        .join(losers, left_on='B_Team', right_on='loser', how='left').rename({'Elim': 'B_Elim'})
+        .with_columns(pl.col('^(A|B)_Elim$').fill_null(False))
+    )
+
+    return final_df.sort('GameID').collect()
 
 
 def predict_next_games(df: pl.DataFrame | pl.LazyFrame) -> pl.DataFrame | None:
