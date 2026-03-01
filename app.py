@@ -21,92 +21,116 @@ df = (
 n = df.shape[0]
 year = df.select(pl.max('Year')).item()
 
+
 def team_row(row, team_prefix: str):
     """Render team-row UI for bracket display"""
-    eliminated = False
 
-    team = row[f'{team_prefix}_Team']
-    actual_team = row[f'{team_prefix}_Actual_Team']
-    seed = row[f'{team_prefix}_Seed']
-    actual_seed = row[f'{team_prefix}_Actual_Seed']
-    score = row[f'{team_prefix}_Score']
-    actual_score = row[f'{team_prefix}_Actual_Score']
-
+    pred_seed = row[f'{team_prefix}_Seed']
+    pred_team = row[f'{team_prefix}_Team']
     pred_score = row[f'{team_prefix}_Pred_Score']
 
-    pred_winner = row['Pred_Winner']
-    pred_loser = row['Pred_Loser']
-    actual_winner = row['winner']
-    actual_loser = row['loser']
+    actual_seed = row[f'{team_prefix}_Actual_Seed']
+    actual_team = row[f'{team_prefix}_Actual_Team']
+    actual_score = row[f'{team_prefix}_Actual_Score']
+
+    winner = row['winner']
+    logo = row[f'{team_prefix}_Team_Logo']
     game_played = row['game_played']
-    pred_correct = row['Prediction_Correct']
+    elim = not game_played and row[f'{team_prefix}_Elim']
+
+    if actual_team is not None:
+        display_seed = actual_seed
+        display_team = actual_team
+        display_score = actual_score
+    else:
+        display_seed = pred_seed
+        display_team = pred_team
+        display_score = row[f'{team_prefix}_Score']
 
     classes = []
-    elim_incorrect = ''
-    elim_classes = []
 
-    # determine "winner"
-    if game_played and actual_winner:
-        true_winner = actual_winner
-    else:
-        true_winner = pred_winner
-
-    if team == true_winner or actual_team == true_winner:
-        classes.append('winner-bold')
-
-    if game_played and actual_loser:
-        true_loser = actual_loser
-    else:
-        true_loser = pred_loser
-
-    # add classes for shading prediction accuracy
-    if game_played and team == pred_winner:
-        if pred_correct is True:
-            classes.append('correct')
-        elif pred_correct is False:
-            classes.append('incorrect')
-            elim_classes.append('incorrect')
-            elim_incorrect = 'team incorrect'
-
-    # future elimination detection
-    if (
-            actual_winner is not None
-            and team != true_winner
-            and team != true_loser
-    ):
-        eliminated = True
-        elim_classes.append('strike')
-        elim_classes.append('eliminated')
-        classes.append('eliminated')
+    # bold winners
+    if game_played and winner:
+        if display_team == winner:
+            classes.append('winner-bold')
 
     class_str = ' '.join(classes)
 
-    if eliminated:
-        elim_class_str = ' '.join(elim_classes)
-        return ui.div(
-            {'class': elim_incorrect},
-            ui.div(
-                {'class': f'team {elim_class_str}'},
-                ui.div(f'{seed} {team}', class_='team-name'),
-                ui.div(f'Pred: {pred_score}' if pred_score is not None else '', class_='team-score'),
-            ),
-            ui.div(
-                {'class': f'team {class_str}'},
-                ui.div(f'{actual_seed} {actual_team}', class_='team-name'),
-                ui.div(f'Score: {actual_score}' if actual_score is not None else '', class_='team-score'),
-            ),
-        )
+    pred_class = 'pred-score strike' if elim else 'pred-score'
 
     return ui.div(
-        {'class': f'team {class_str}'},
-        ui.div(f'{seed} {team}', class_='team-name'),
+        {'class': 'teams-row'},
+        # LEFT SIDE
         ui.div(
             [
-                f'Score: {score}  | ' if score is not None else '',
-                f'Pred: {pred_score}' if pred_score is not None else ''
+                ui.img(src=logo, class_='team-logo-small') if logo else None,
+                ui.span(f'({display_seed})', class_='seed'),
+                ui.span(pred_team, class_=f'{class_str} strike') if elim else None,
+                ui.span(display_team, class_=class_str)
             ],
-            class_='team-score',
+            class_='team-name'
         ),
+
+        # RIGHT SIDE
+        ui.div(
+            [
+                ui.span(
+                    f'{display_score}' if display_score is not None else '',
+                    class_='actual-score'
+                ),
+                ui.span(
+                    f'(Pred: {pred_score})' if pred_score is not None else '',
+                    class_=pred_class
+                )
+            ],
+            class_='team-score'
+        )
+    )
+
+
+def game_card(row, region: int):
+    """Render a full game card with prediction header"""
+
+    pred_winner = row['Pred_Winner']
+    pred_loser = row['Pred_Loser']
+    pred_correct = row['Prediction_Correct']
+    game_played = row['game_played']
+
+    # Card correctness styling
+    card_classes = f'game-card region-{region}'
+
+    if game_played:
+        if pred_correct is True:
+            card_classes += ' correct-card'
+            icon = ui.span('✔', class_='text-success')
+        elif pred_correct is False:
+            card_classes += ' incorrect-card'
+            icon = ui.span('✖', class_='text-danger')
+        else:
+            icon = None
+    else:
+        if pred_correct is False:
+            card_classes += ' incorrect-card'
+            icon = ui.span('✖', class_='text-danger')
+        else:
+            icon = None
+
+    # Header
+    header = ui.div(
+        {'class': 'game-card-header-long'},
+        ui.span(
+            'Prediction: ',
+            ui.strong(pred_winner),
+            f' over {pred_loser}'
+        ),
+        icon
+    )
+
+    return ui.div(
+        {'class': card_classes},
+        header,
+        team_row(row, 'A'),
+        team_row(row, 'B'),
     )
 
 
@@ -415,7 +439,6 @@ def server(input, output, session):
         if games is None:
             return ui.p('No games this week.')
 
-
         days = games.collect().partition_by('Date', as_dict=True)
 
         ui_blocks = []
@@ -490,11 +513,7 @@ def server(input, output, session):
                 else:
                     region = 1
                 game_cards.append(
-                    ui.div(
-                        {'class': f'game-card region-{region}'},
-                        team_row(row, 'A'),
-                        team_row(row, 'B'),
-                    )
+                    game_card(row, region)
                 )
 
             round_pages.append(
@@ -506,17 +525,28 @@ def server(input, output, session):
 
         return ui.div(
             {'class': 'bracket-wrapper'},
-            ui.div({"class": "year-header"}, f"{year}"),
-            ui.div(
-                {'class': 'nav-buttons'},
-                ui.input_action_button(id='prev_round', label='←', class_='nav-left'),
-                ui.div(
-                    {'class': 'round-header'},
-                    ui.output_text('round_header'),
-                ),
-                ui.input_action_button(id='next_round', label='→', class_='nav-right'),
-            ),
+            ui.div({'class': 'year-header'}, f'{year}'),
+            ui.output_ui('nav_buttons'),
             ui.div({'class': 'bracket-carousel'}, *round_pages),
+        )
+
+    @output
+    @render.ui
+    def nav_buttons():
+        round_i = current_bracket_round.get()
+        last_i = len(ROUND_NAMES) - 1
+
+        left_hidden = round_i == 0
+        right_hidden = round_i == last_i
+
+        left_class = 'nav-left nav-hidden' if left_hidden else 'nav-left'
+        right_class = 'nav-right nav-hidden' if right_hidden else 'nav-right'
+
+        return ui.div(
+            {'class': 'nav-buttons'},
+            ui.input_action_button('prev_round', '←', class_=left_class),
+            ui.div({'class': 'round-header'}, ROUND_NAMES[round_i]),
+            ui.input_action_button('next_round', '→', class_=right_class),
         )
 
 
