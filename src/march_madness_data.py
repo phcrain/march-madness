@@ -360,9 +360,9 @@ class MarchMadnessData:
         return self.data.collect()
 
 
-team_years = march_madness_data().select('Self_Team', 'Year').rename({'Self_Team': 'Team'}).unique().collect()
+TEAM_YEARS = march_madness_data().select('Self_Team', 'Year').rename({'Self_Team': 'Team'}).unique().collect()
 
-years = team_years['Year'].unique()
+YEARS = TEAM_YEARS['Year'].unique()
 
 
 def get_bart_stats(year: int, session: requests.Session = None) -> pl.LazyFrame:
@@ -576,7 +576,7 @@ def get_basic_stats(team: str,
             pl.col("Rslt").eq("W").cast(pl.Int8),
             pl.col("OT").str.contains("OT", literal=True).cast(pl.Int8),
             # Convert all other cols to int
-            *[pl.col(col).cast(pl.Int16) for col in headers
+            *[pl.col(col).replace('', '0').cast(pl.Int16) for col in headers
               if col not in float_cols + bool_cols + other_cols]
         )
         # Add feature: score differential
@@ -731,7 +731,7 @@ def update_barts():
     stats_fp = 'data/season_stats/bart_stats'
     # Create requests session to re-use in loop
     with requests.Session() as session:
-        for year in years:
+        for year in YEARS:
             if year < 2011:
                 continue
             elif f'{year}.csv' in os.listdir(stats_fp):
@@ -760,7 +760,7 @@ def update_basic_stats(save_game: bool = False):
     stats_fp = 'data/season_stats/basic_stats'
     # Create requests session to re-use in loop
     with requests.Session() as session:
-        for year, team in team_years.iter_rows():
+        for team, year in TEAM_YEARS.iter_rows():
             if year < 2011:
                 continue
             team_slug = get_team_slug(team)
@@ -798,7 +798,7 @@ def update_advanced_stats(save_game: bool = False):
     stats_fp = 'data/season_stats/advanced_stats'
     # Create requests session to re-use in loop
     with requests.Session() as session:
-        for year, team in team_years.iter_rows():
+        for team, year in TEAM_YEARS.iter_rows():
             if year < 2011:
                 continue
             team_slug = get_team_slug(team)
@@ -867,7 +867,7 @@ def combine(*paths: str,
         else:
             files = [path]
         read_df = (
-            pl.concat([pl.scan_csv(file) for file in files], how='vertical')
+            pl.concat([pl.scan_csv(file) for file in files], how='vertical_relaxed')
             .with_columns(pl.col('Year').cast(pl.UInt16))  # standardize year data type
         )
         return read_df
@@ -970,7 +970,7 @@ def update_opp_barts(save_game=True):
     """Join opponent bart stats to games and get season summaries"""
     stats_fp = 'data/game_stats/opp_bart_stats'
     season_stats_fp = 'data/season_stats/opp_bart_stats'
-    for year, team in team_years.iter_rows():
+    for team, year in TEAM_YEARS.iter_rows():
         if year < 2011:
             continue
         team_slug = get_team_slug(team)
@@ -1020,7 +1020,7 @@ def get_last5(team: str, year: int | str):
 def update_last5():
     """Update season stats for team-years in their last 5 games"""
     stats_fp = 'data/season_stats/last5_stats'
-    for year, team in team_years.iter_rows():
+    for team, year in TEAM_YEARS.iter_rows():
         if year < 2011:
             continue
         team_slug = get_team_slug(team)
@@ -1181,7 +1181,7 @@ def update_player_stats() -> None:
     None
     """
     stats_fp = 'data/player_stats'
-    for year in years:
+    for year in YEARS:
         if year < 2011:
             continue
         elif f'{year}.csv' in os.listdir(stats_fp):
@@ -1194,3 +1194,84 @@ def update_player_stats() -> None:
             # Save player data to destination
             df.collect().write_csv(f'{stats_fp}/{year}.csv')
     return None
+
+
+def update_combined_stats() -> None:
+    """Update the combined season stats parquet."""
+
+    for i in range(5):
+        update_basic_stats(True)
+        update_advanced_stats(True)
+    update_barts()
+    update_opp_barts(True)
+    update_player_stats()
+    update_last5()
+
+    combine_stats()
+
+
+
+def write_espn_logos():
+    """Query ESPN for team logos and save as a parquet"""
+    url = (
+        'https://site.api.espn.com/apis/site/v2/sports/'
+        'basketball/mens-college-basketball/teams?limit=500'
+    )
+    data = requests.get(url).json()
+
+    rows = []
+    for t in data['sports'][0]['leagues'][0]['teams']:
+        team = t['team']
+        rows.append({
+            'espn_id': team['id'],
+            'team': team['displayName'],
+            'abbrev': team.get('abbreviation'),
+        })
+
+    espn_df = pl.LazyFrame(rows)
+
+    espn_df = espn_df.with_columns(
+        pl.format(
+            'https://a.espncdn.com/i/teamlogos/ncaa/500/{}.png',
+            pl.col('espn_id')
+        ).alias('logo_url')
+    )
+
+    # Pull in sports reference data
+    URL = 'https://www.sports-reference.com/cbb/schools/'
+    html = requests.get(URL).text
+    sr_slugs = re.findall(r'cbb/schools/(.+)/men/">(.+) <', html)
+    sr_df = (
+        pl.LazyFrame(sr_slugs, orient='row', schema=['slug', 'school'])
+        .with_columns(pl.col('school').str.replace('&amp;', '&'))
+    )
+
+    found = []
+
+    def __espn_sr_join(df, found_list):
+        df = df.with_columns(pl.col('school').str.replace(r' \w+$', '').alias('school'))
+        found_list += [df.join(sr_df, on='school', how='inner')]
+        df = df.join(sr_df, on='school', how='anti')
+        df = (
+            df
+            .with_columns(pl.col('school').map_elements(get_team_slug, pl.String).alias('slug'))
+            .rename({'school': 'espn-school'})
+        )
+        found_list += [df.join(sr_df, on='slug').drop('espn-school')]
+        df = df.join(sr_df, on='slug', how='anti').rename({'espn-school': 'school'}).drop('slug')
+
+        return df, found_list
+
+    espn_df = espn_df.with_columns(pl.col('team').alias('school'))
+    for i in range(3):
+        espn_df, found = __espn_sr_join(espn_df, found)
+
+    final_df = pl.concat(found, how='diagonal').select('slug', 'logo_url').collect()
+
+    if final_df.filter(pl.col('slug').is_null()).height > 0:
+        raise InterruptedError(
+            f'Slug fill-in incomplete for\n'
+            f'{"\n".join(final_df.filter(pl.col('slug').is_null())['logo_url'].to_list())}'
+        )
+
+    final_df.write_parquet('data/espn_logos.parquet')
