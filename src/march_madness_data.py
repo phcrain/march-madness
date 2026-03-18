@@ -88,6 +88,7 @@ def get_team_slug(team_name):
         'arkansaspine-bluff': 'arkansas-pine-bluff',
         'bonaventure': 'st-bonaventure',
         'byu': 'brigham-young',
+        'cal-baptist': 'california-baptist',
         'cal-st-bakersfield': 'cal-state-bakersfield',
         'cal-st-fullerton': 'cal-state-fullerton',
         'centenary': 'centenary-la',
@@ -155,6 +156,7 @@ def get_team_slug(team_name):
         'tex-am-cc': 'texas-am-corpus-christi',
         'texas-am-cc': 'texas-am-corpus-christi',
         'texas-am---cc': 'texas-am-corpus-christi',
+        'texas-amcorpus-christi': 'texas-am-corpus-christi',
         'texas-am-corpus-chris': 'texas-am-corpus-christi',
         'texaspan-american': 'texas-pan-american',
         'texasrio-grande-valley': 'texas-pan-american',
@@ -445,8 +447,10 @@ def get_bart_stats(year: int, session: requests.Session = None) -> pl.LazyFrame:
     # Validate names based on sports-ref data
     vnames = combine('data/season_stats/basic_stats').filter(pl.col('Year').eq(year)).select('Team')
     vnames = vnames.collect()['Team'].to_numpy()
+    df = df.with_columns(pl.col('Team').replace('cal-baptist', 'california-baptist'))  # Manual name matching
     df_names = df.select('Team').collect()['Team'].to_list()
-    vnames_validation = np.isin(vnames, df_names)
+    vnames_validation = np.isin(vnames, df_names)  # Exact name matching
+    # Fuzzy name matching:
     if not all(vnames_validation):
         nonames = vnames[~vnames_validation]
         # Match each DF1 slug to closest DF2 slug
@@ -873,11 +877,11 @@ def combine(*paths: str,
         return read_df
 
     # Load and concat the first dataset
-    df = __readit(paths[0], isdir)
+    df = __readit(paths[0], isdir).with_columns(pl.col('Team').map_elements(get_team_slug, pl.String))
 
     # Iteratively join with remaining datasets
     for path in paths[1:]:
-        df_next = __readit(path, isdir)
+        df_next = __readit(path, isdir).with_columns(pl.col('Team').map_elements(get_team_slug, pl.String))
         df = df.join(df_next, on=['Team', 'Year'], how='inner').drop(pl.selectors.ends_with('_right'))
 
     return df
