@@ -13,7 +13,7 @@ import time
 
 df = (
     march_madness_data()
-    .filter(pl.col('Self_Score').gt(pl.col('Opp_Score')))
+    .filter(pl.col('Self_Score').gt(pl.col('Opp_Score')) | (pl.col('Self_Score').is_null() & pl.col('Opp_Score').is_null()))
     .with_columns(pl.col(f'{pre}_Score').mod(10).alias(f'{pre}_Last_Digit') for pre in ['Self', 'Opp'])
     .with_columns(pl.col('Round').replace_strict({v: k for k, v in round_dict.items()}, default=''))
     .collect()
