@@ -50,8 +50,8 @@ def __find_games(data: dict) -> list[dict]:
         # season type of 3 is post-season; tournamentID of 22 is the NCAA Tournament
         if event.get('season', {}).get('type', 0) == 3 and comp.get('tournamentId', 0) == 22:
             competitors = comp.get('competitors', [{}, {}])
-            team_a = competitors[0]
-            team_b = competitors[1]
+            team_a = competitors[1]
+            team_b = competitors[0]
 
             event_date = event.get('date')
             if event_date is not None:
@@ -103,8 +103,8 @@ def find_future_games(start: date, days: int):
 
 def get_next_games() -> pl.DataFrame:
     """Fetch today's NCAA men's basketball games from ESPN."""
-    games = find_espn_games(ESPN_URL)
-    days = 0
+    games = []
+    days = -1
     while not games and days < 6:
         days += 1
         games = find_future_games(TODAY, days)
@@ -112,7 +112,7 @@ def get_next_games() -> pl.DataFrame:
     days += 1
     games = games + find_future_games(TODAY, days)
 
-    df = pl.DataFrame(games, schema=SCORE_SCHEMA).with_columns(round_regex('Round').alias('Round'))
+    df = pl.DataFrame(games, schema=SCORE_SCHEMA).unique().with_columns(round_regex('Round').alias('Round'))
 
     return df
 
