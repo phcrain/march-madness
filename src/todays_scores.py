@@ -201,7 +201,7 @@ def predict_bracket(year):
 
     if (
             first4.select(pl.len()).collect().item() > 0  # there are first 4 games in the df
-            and df.select('W_Score').drop_nulls().select(pl.len()).collect().item() < 32  # R64 is not completed yet
+            and first4.select('W_Score').drop_nulls().select(pl.len()).collect().item() < 4  # First 4 is not completed
     ):
         pred = predict_next_games(first4)  # predict scores
         if pred is not None:
