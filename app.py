@@ -11,6 +11,10 @@ from src.todays_scores import predict_next_games, get_next_games, predict_bracke
 from src.config import ROUND_NAMES
 import time
 
+# TEMP FOR MOM
+from src.todays_scores import display_human_bracket
+df_mom = pl.read_csv('data/mom_bracket.csv')
+
 df = (
     march_madness_data()
     .filter(pl.col('Self_Score').gt(pl.col('Opp_Score')) | (pl.col('Self_Score').is_null() & pl.col('Opp_Score').is_null()))
@@ -302,6 +306,13 @@ app_ui = ui.page_navbar(
         'Predicted Bracket',
         ui.output_ui('bracket_ui'),
         ui.output_ui('bracket_position')
+    ),
+
+    # TEMP FOR MY MOM predictions
+    ui.nav_panel(
+        "Mom's Bracket",
+        ui.output_ui('bracket_ui_mom'),
+        ui.output_ui('bracket_position_mom')
     )
 )
 
@@ -582,6 +593,105 @@ def server(input, output, session):
     @render.text
     def round_header():
         return ROUND_NAMES[current_bracket_round.get()]
+
+
+
+
+
+    ### TEMP FUN FOR MY MOM
+    # Initial bracket round
+    current_bracket_round_mom = reactive.Value(0)
+
+    @render.ui
+    def bracket_ui_mom():
+        df_bracket = display_human_bracket(df_mom)
+
+        if df_bracket is None:
+            return ui.div('No bracket data')
+
+        # Build rounds divs
+        round_pages = []
+        for rnd in ROUND_NAMES:
+            games = (
+                df_bracket
+                .filter(pl.col('Round') == rnd)
+                .sort('GameID')
+            )
+
+            # Build games divs
+            game_cards = []
+            for row in games.iter_rows(named=True):
+                if rnd in ROUND_NAMES[0:4]:
+                    region = (row['A_Region'] + 1) % 2 + 1
+                else:
+                    region = 1
+                game_cards.append(
+                    game_card(row, region)
+                )
+
+            round_pages.append(
+                ui.div(
+                    {'class': 'round-page'},
+                    *game_cards
+                )
+            )
+
+        return ui.div(
+            {'class': 'bracket-wrapper'},
+            ui.div({'class': 'year-header'}, f'{year}'),
+            ui.output_ui('nav_buttons_mom'),
+            ui.div({'class': 'bracket-carousel'}, *round_pages),
+        )
+
+    @output
+    @render.ui
+    def nav_buttons_mom():
+        round_i = current_bracket_round_mom.get()
+        last_i = len(ROUND_NAMES) - 1
+
+        left_hidden = round_i == 0
+        right_hidden = round_i == last_i
+
+        left_class = 'nav-left nav-hidden' if left_hidden else 'nav-left'
+        right_class = 'nav-right nav-hidden' if right_hidden else 'nav-right'
+
+        return ui.div(
+            {'class': 'nav-buttons'},
+            ui.input_action_button('prev_round_mom', '←', class_=left_class),
+            ui.div({'class': 'round-header'}, ROUND_NAMES[round_i]),
+            ui.input_action_button('next_round_mom', '→', class_=right_class),
+        )
+
+    @reactive.Effect
+    @reactive.event(input.prev_round_mom)
+    def _mom():
+        i = max(0, current_bracket_round_mom.get() - 1)
+        current_bracket_round_mom.set(i)
+
+    @reactive.Effect
+    @reactive.event(input.next_round_mom)
+    def _mom():
+        max_rounds = len(ROUND_NAMES)
+        i = min(max_rounds - 1, current_bracket_round_mom.get() + 1)
+        current_bracket_round_mom.set(i)
+
+    @output
+    @render.ui
+    def bracket_position_mom():
+        idx = current_bracket_round_mom.get()
+        return ui.tags.style(
+            f"""
+            .bracket-carousel {{
+                transform: translateX(-{idx * 100}%);
+                transition: transform 0.3s ease;
+            }}
+            """
+        )
+
+    @output
+    @render.text
+    def round_header_mom():
+        return ROUND_NAMES[current_bracket_round_mom.get()]
 
 
 app = App(app_ui, server)
