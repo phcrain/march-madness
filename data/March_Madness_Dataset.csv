@@ -1672,18 +1672,26 @@ Year,Round,W_Region,W_Seed,W_Team,W_Score,L_Region,L_Seed,L_Team,L_Score,OT
 2026,First Round (Round of 64),4,7,Miami (FL),80,4,10,Missouri,66,0
 2026,First Round (Round of 64),4,8,Villanova,76,4,9,Utah St,86,0
 2026,Second Round (Round of 32),1,1,Duke,81,1,9,TCU,58,0
-2026,Second Round (Round of 32),1,4,Kansas,,1,5,St. John's,,
+2026,Second Round (Round of 32),1,4,Kansas,65,1,5,St. John's,67,0
 2026,Second Round (Round of 32),1,3,Michigan State,77,1,6,Louisville,69,0
-2026,Second Round (Round of 32),1,2,UConn,,1,7,UCLA,,
-2026,Second Round (Round of 32),2,1,Florida,,2,9,Iowa,,
+2026,Second Round (Round of 32),1,2,UConn,73,1,7,UCLA,57,0
+2026,Second Round (Round of 32),2,1,Florida,72,2,9,Iowa,73,0
 2026,Second Round (Round of 32),2,4,Nebraska,74,2,5,Vanderbilt,72,0
 2026,Second Round (Round of 32),2,3,Illinois,76,2,11,VCU,55,0
 2026,Second Round (Round of 32),2,2,Houston,88,2,10,Texas A&M,57,0
 2026,Second Round (Round of 32),3,1,Michigan,95,3,9,Saint Louis,72,0
-2026,Second Round (Round of 32),3,4,Alabama,,3,5,Texas Tech,,
-2026,Second Round (Round of 32),3,3,Virginia,,3,6,Tennessee,,
-2026,Second Round (Round of 32),3,2,Iowa State,,3,7,Kentucky,,
-2026,Second Round (Round of 32),4,1,Arizona,,4,9,Utah St,,
+2026,Second Round (Round of 32),3,4,Alabama,90,3,5,Texas Tech,65,0
+2026,Second Round (Round of 32),3,3,Virginia,72,3,6,Tennessee,79,0
+2026,Second Round (Round of 32),3,2,Iowa State,82,3,7,Kentucky,63,0
+2026,Second Round (Round of 32),4,1,Arizona,78,4,9,Utah St,66,0
 2026,Second Round (Round of 32),4,4,Arkansas,94,4,12,High Point,88,0
 2026,Second Round (Round of 32),4,3,Gonzaga,68,4,11,Texas,74,0
-2026,Second Round (Round of 32),4,2,Purdue,,4,7,Miami (FL),,
+2026,Second Round (Round of 32),4,2,Purdue,79,4,7,Miami (FL),69,0
+2026,Sweet 16,1,1,Duke,,1,5,St. John's,,
+2026,Sweet 16,1,2,UConn,,1,3,Michigan State,,
+2026,Sweet 16,2,9,Iowa,,2,4,Nebraska,,
+2026,Sweet 16,2,2,Houston,,2,3,Illinois,,
+2026,Sweet 16,4,1,Arizona,,4,4,Arkansas,,
+2026,Sweet 16,4,2,Purdue,,4,11,Texas,,
+2026,Sweet 16,3,1,Michigan,,3,4,Alabama,,
+2026,Sweet 16,3,2,Iowa State,,3,6,Tennessee,,
